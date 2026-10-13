@@ -12,6 +12,9 @@ namespace fork_tweaks {
   /// `fork_encoder_probe_reuse`: reuse the last encoder probe when only the display layout changed.
   inline bool encoder_probe_reuse = true;
 
+  /// `fork_clipboard_rich`: rich clipboard sync for LuzLunar (`/actions/clipboard?type=bundle`). Off behaves like stock Apollo (text only).
+  inline bool clipboard_rich = true;
+
   /**
    * @brief Read the fork-only options and remove them from @p vars, so they aren't reported as unrecognized.
    * @param vars The parsed sunshine.conf options.

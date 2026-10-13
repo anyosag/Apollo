@@ -96,7 +96,11 @@ list(PREPEND PLATFORM_LIBRARIES
         userenv
         ws2_32
         wsock32
+        z  # [fork] clipboard bundle compression (src/fork/clipbundle.cpp)
 )
+
+# [fork] clipbundle compresses text formats with zlib
+add_compile_definitions(CLIPBUNDLE_WITH_ZLIB)
 
 if(SUNSHINE_ENABLE_TRAY)
     list(APPEND PLATFORM_TARGET_FILES

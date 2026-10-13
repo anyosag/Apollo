@@ -24,6 +24,7 @@
 #include "config.h"
 #include "display_device.h"
 #include "file_handler.h"
+#include "fork/clipboard_bundle.h"  // [fork]
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
@@ -1523,6 +1524,15 @@ namespace nvhttp {
     response->close_connection_after_response = true;
   }
 
+  // [fork] Replies for type=bundle, which may be sent from the clipboard thread
+  fork_tweaks::clipboard::reply_fn bundle_reply(resp_https_t response) {
+    return [response](int status, std::string body) {
+      SimpleWeb::CaseInsensitiveMultimap headers;
+      headers.emplace("Content-Type", "application/x-luzlunar-clipboard");
+      response->write(static_cast<SimpleWeb::StatusCode>(status), body, headers);
+    };
+  }
+
   void getClipboard(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
@@ -1540,8 +1550,8 @@ namespace nvhttp {
     }
 
     auto args = request->parse_query_string();
-    auto clipboard_type = get_arg(args, "type");
-    if (clipboard_type != "text"sv) {
+    auto clipboard_type = get_arg(args, "type", "");  // [fork] default: a missing type is a 400, not an exception
+    if (clipboard_type != "text"sv && !fork_tweaks::clipboard::accepts_type(clipboard_type)) {  // [fork] or "bundle"
       BOOST_LOG(debug) << "Clipboard type [" << clipboard_type << "] is not supported!";
 
       response->write(SimpleWeb::StatusCode::client_error_bad_request);
@@ -1562,6 +1572,12 @@ namespace nvhttp {
 
       response->write(SimpleWeb::StatusCode::client_error_forbidden);
       response->close_connection_after_response = true;
+      return;
+    }
+
+    // [fork] Rich clipboard (text, formatting, images, Office) for LuzLunar
+    if (clipboard_type != "text"sv) {
+      fork_tweaks::clipboard::get(named_cert_p->name, get_arg(args, "since", ""), get_arg(args, "have", ""), get_arg(args, "auto", "0") == "1", bundle_reply(response));
       return;
     }
 
@@ -1588,8 +1604,8 @@ namespace nvhttp {
     }
 
     auto args = request->parse_query_string();
-    auto clipboard_type = get_arg(args, "type");
-    if (clipboard_type != "text"sv) {
+    auto clipboard_type = get_arg(args, "type", "");  // [fork] default: a missing type is a 400, not an exception
+    if (clipboard_type != "text"sv && !fork_tweaks::clipboard::accepts_type(clipboard_type)) {  // [fork] or "bundle"
       BOOST_LOG(debug) << "Clipboard type [" << clipboard_type << "] is not supported!";
 
       response->write(SimpleWeb::StatusCode::client_error_bad_request);
@@ -1613,6 +1629,12 @@ namespace nvhttp {
       return;
     }
 
+    // [fork] Rich clipboard (text, formatting, images, Office) for LuzLunar
+    if (clipboard_type != "text"sv) {
+      fork_tweaks::clipboard::set(named_cert_p->name, request->content.string(), bundle_reply(response));
+      return;
+    }
+
     std::string content = request->content.string();
 
     bool success = platf::set_clipboard(content);
@@ -1622,6 +1644,7 @@ namespace nvhttp {
 
       response->write(SimpleWeb::StatusCode::server_error_internal_server_error);
       response->close_connection_after_response = true;
+      return;  // [fork] don't also send a 200
     }
 
     response->write();
@@ -1732,6 +1755,7 @@ namespace nvhttp {
     https_server.config.reuse_address = true;
     https_server.config.address = net::af_to_any_address_string(address_family);
     https_server.config.port = port_https;
+    https_server.config.max_request_streambuf_size = fork_tweaks::clipboard::max_request_bytes;  // [fork] clipboard bundles
 
     http_server.default_resource["GET"] = not_found<SimpleWeb::HTTP>;
     http_server.resource["^/serverinfo$"]["GET"] = serverinfo<SimpleWeb::HTTP>;
