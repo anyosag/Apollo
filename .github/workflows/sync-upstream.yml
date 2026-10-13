@@ -1,0 +1,80 @@
+---
+# Once a day, merges new commits from ClassicOldSong/Apollo into this fork's master
+# and builds a fresh Windows installer when there were any.
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+    inputs:
+      build:
+        description: Build an installer even if upstream has no new commits
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge upstream master
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # push the merge to master
+      actions: write  # keep this schedule enabled
+    outputs:
+      updated: ${{ steps.merge.outputs.updated }}
+      sha: ${{ steps.merge.outputs.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Merge upstream
+        id: merge
+        env:
+          UPSTREAM: https://github.com/ClassicOldSong/Apollo.git
+        run: |
+          git fetch --quiet "$UPSTREAM" master
+          if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+            echo "master already contains upstream $(git rev-parse --short FETCH_HEAD)."
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "New upstream commits:"
+          git log --oneline HEAD..FETCH_HEAD
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git merge --no-edit -m "Merge upstream ClassicOldSong/Apollo master" FETCH_HEAD; then
+            git diff --name-only --diff-filter=U
+            echo "::error::Upstream changes conflict with this fork's changes in the files above. Merge $UPSTREAM master into master manually."
+            exit 1
+          fi
+          git push origin HEAD:master
+
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # GitHub disables scheduled workflows in public repos after 60 days without activity.
+      - name: Keep schedule enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "repos/${{ github.repository }}/actions/workflows/sync-upstream.yml/enable"
+
+  build:
+    name: Build installer
+    needs: sync
+    if: needs.sync.outputs.updated == 'true' || inputs.build
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      ref: ${{ needs.sync.outputs.sha }}

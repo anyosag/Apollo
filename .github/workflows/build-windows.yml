@@ -9,6 +9,13 @@ on:
       - master
       - 'claude/**'
   workflow_dispatch:
+  # Used by sync-upstream.yml, since pushes made with GITHUB_TOKEN don't trigger workflows.
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to build (defaults to the commit that triggered the run)
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -25,7 +32,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
           submodules: recursive
+
+      # Version is the latest upstream release plus the number of commits since it,
+      # e.g. 0.4.8.26, so Apollo's update check compares correctly against upstream releases.
+      - name: Determine version
+        shell: bash
+        run: |
+          git fetch --quiet --tags https://github.com/ClassicOldSong/Apollo.git
+          tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*')
+          version="${tag#v}.$(git rev-list --count "$tag..HEAD")"
+          echo "Building version $version"
+          echo "BUILD_VERSION=$version" >> "$GITHUB_ENV"
+          echo "COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       # MSYS2's nodejs crashes on startup (gcc-16 libstdc++ regression), so use the official build.
       - name: Setup Node.js
@@ -64,9 +85,7 @@ jobs:
         shell: msys2 {0}
         env:
           BRANCH: ${{ github.ref_name }}
-          BUILD_VERSION: 0.4.8.${{ github.run_number }}
-          CLONE_URL: ${{ github.event.repository.clone_url }}
-          COMMIT: ${{ github.sha }}
+          CLONE_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           export PATH="$PATH:$(cygpath -u "$NODE_DIR")"
           node --version
@@ -98,6 +117,6 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:
-          name: Apollo-windows-${{ github.run_number }}
+          name: Apollo-windows-${{ env.BUILD_VERSION }}
           path: artifacts/
           if-no-files-found: error
