@@ -1,0 +1,103 @@
+---
+# Builds the Windows installer and portable zip from the current source,
+# following the steps in docs/building.md.
+name: Build Windows
+
+on:
+  push:
+    branches:
+      - master
+      - 'claude/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      # MSYS2's nodejs crashes on startup (gcc-16 libstdc++ regression), so use the official build.
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+
+      - name: Locate Node.js
+        shell: pwsh
+        run: |
+          $nodeDir = Split-Path (Get-Command node).Source
+          "NODE_DIR=$nodeDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # Boost is left out on purpose: the build needs exactly 1.89.0 and fetches it itself.
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-cppwinrt
+            mingw-w64-ucrt-x86_64-curl-winssl
+            mingw-w64-ucrt-x86_64-MinHook
+            mingw-w64-ucrt-x86_64-miniupnpc
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-nlohmann_json
+            mingw-w64-ucrt-x86_64-nsis
+            mingw-w64-ucrt-x86_64-onevpl
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-opus
+            mingw-w64-ucrt-x86_64-toolchain
+
+      - name: Build
+        shell: msys2 {0}
+        env:
+          BRANCH: ${{ github.ref_name }}
+          BUILD_VERSION: 0.4.8.${{ github.run_number }}
+          CLONE_URL: ${{ github.event.repository.clone_url }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          export PATH="$PATH:$(cygpath -u "$NODE_DIR")"
+          node --version
+          gcc --version | head -n 1
+          cmake --version | head -n 1
+
+          # CMAKE_POLICY_VERSION_MINIMUM lets CMake 4 configure submodules that still declare CMake < 3.5
+          cmake -B build -G Ninja -S . \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DBUILD_DOCS=OFF \
+            -DBUILD_TESTS=OFF
+          ninja -C build
+
+      - name: Package
+        shell: msys2 {0}
+        run: |
+          cd build
+          cpack -G NSIS
+          cpack -G ZIP
+
+          mkdir -p ../artifacts
+          mv ./cpack_artifacts/Apollo.exe ../artifacts/Apollo-windows-installer.exe
+          mv ./cpack_artifacts/Apollo.zip ../artifacts/Apollo-windows-portable.zip
+          cd ../artifacts
+          sha256sum Apollo-windows-installer.exe Apollo-windows-portable.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: Apollo-windows-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: error
