@@ -23,6 +23,7 @@ extern "C" {
 #include "cbs.h"
 #include "config.h"
 #include "display_device.h"
+#include "fork/encoder_probe_reuse.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -1913,6 +1914,7 @@ namespace video {
   ) {
     auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(encode_device));
     if (!session) {
+      fork_tweaks::invalidate_encoder_probe("encoder session creation failed during a stream");
       return;
     }
 
@@ -2716,7 +2718,8 @@ namespace video {
     auto encoder_list = encoders;
 
     // If we already have a good encoder, check to see if another probe is required
-    if (chosen_encoder && !(chosen_encoder->flags & ALWAYS_REPROBE) && !platf::needs_encoder_reenumeration()) {
+    if (chosen_encoder && !(chosen_encoder->flags & ALWAYS_REPROBE) &&
+        (!platf::needs_encoder_reenumeration() || fork_tweaks::try_reuse_encoder_probe(*chosen_encoder))) {
       return 0;
     }
 
