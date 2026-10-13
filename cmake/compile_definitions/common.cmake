@@ -52,6 +52,10 @@ include_directories(BEFORE SYSTEM "${CMAKE_SOURCE_DIR}/third-party/nv-codec-head
 file(GLOB NVENC_SOURCES CONFIGURE_DEPENDS "src/nvenc/*.cpp" "src/nvenc/*.h")
 list(APPEND PLATFORM_TARGET_FILES ${NVENC_SOURCES})
 
+# fork-only sources (anyosag/Apollo), kept in their own folder to avoid upstream merge conflicts
+file(GLOB FORK_SOURCES CONFIGURE_DEPENDS "src/fork/*.cpp" "src/fork/*.h")
+list(APPEND PLATFORM_TARGET_FILES ${FORK_SOURCES})
+
 set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Input.h"
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Rtsp.h"
