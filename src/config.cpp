@@ -22,6 +22,7 @@
 #include "config.h"
 #include "entry_handler.h"
 #include "file_handler.h"
+#include "fork/fork_config.h"
 #include "logging.h"
 #include "nvhttp.h"
 #include "platform/common.h"
@@ -1366,6 +1367,8 @@ namespace config {
         }
       }
     }
+
+    fork_tweaks::apply_config(vars);
 
     auto it = vars.find("flags"s);
     if (it != std::end(vars)) {
