@@ -51,6 +51,8 @@ endif()
 file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_SOURCE_DIR}/tests/*.h
         ${CMAKE_SOURCE_DIR}/tests/*.cpp)
+# [fork] tests/fork are standalone programs, built by the fork's CI step
+list(FILTER TEST_SOURCES EXCLUDE REGEX "/tests/fork/")
 
 set(SUNSHINE_SOURCES
         ${SUNSHINE_TARGET_FILES})
