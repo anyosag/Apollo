@@ -28,6 +28,7 @@
 #include "crypto.h"
 #include "display_device.h"
 #include "file_handler.h"
+#include "fork/app_encoder_overrides.h"
 #include "logging.h"
 #include "platform/common.h"
 #include "process.h"
@@ -232,6 +233,8 @@ namespace proc {
         config::input.gamepad = app.gamepad;
       }
     }
+
+    fork_tweaks::apply_app_encoder_overrides(app.uuid);
 
 #ifdef _WIN32
     if (
@@ -808,6 +811,8 @@ namespace proc {
       config::input = *_saved_input_config;
       _saved_input_config.reset();
     }
+
+    fork_tweaks::restore_app_encoder_overrides();
 
     if (needs_refresh) {
       refresh(config::stream.file_apps, false);
