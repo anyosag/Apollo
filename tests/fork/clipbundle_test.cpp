@@ -225,6 +225,17 @@ static void test_tables() {
   CHECK(is_text_type("text/html") && !is_text_type("image/png"));
 }
 
+static void test_signatures() {
+  CHECK(data_matches_type("image/png", std::string("\x89PNG\r\n\x1a\n...", 11)));
+  CHECK(data_matches_type("image/jpeg", "\xFF\xD8\xFF\xE0..."));
+  CHECK(!data_matches_type("image/png", "\xFF\xD8\xFF\xE0..."));  // a JPEG labeled PNG
+  CHECK(!data_matches_type("image/jpeg", "BM...."));
+  CHECK(!data_matches_type("image/png", ""));
+  CHECK(!data_matches_type("image/gif", "GIF89a"));  // not a type the bundle carries
+  CHECK(data_matches_type("text/plain", "anything"));
+  CHECK(data_matches_type("ms/gvml", ""));
+}
+
 static void test_line_endings() {
   CHECK(to_lf("a\r\nb\rc\nd") == "a\nb\nc\nd");
   CHECK(to_crlf("a\nb\r\nc\rd") == "a\r\nb\r\nc\r\nd");
@@ -440,6 +451,7 @@ int main() {
   test_corrupt_input();
   test_etag();
   test_tables();
+  test_signatures();
   test_line_endings();
   test_cf_html();
   test_html_helpers();

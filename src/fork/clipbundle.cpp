@@ -456,6 +456,16 @@ namespace clipbundle {
     return type.substr(0, 3) == "ms/";
   }
 
+  bool data_matches_type(std::string_view type, std::string_view data) {
+    if (type == "image/png") {
+      return data.substr(0, 8) == std::string_view("\x89PNG\r\n\x1a\n", 8);
+    }
+    if (type == "image/jpeg") {
+      return data.substr(0, 3) == std::string_view("\xFF\xD8\xFF", 3);
+    }
+    return !is_image_type(type);
+  }
+
   std::string to_lf(std::string_view text) {
     std::string out;
     out.reserve(text.size());

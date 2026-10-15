@@ -106,13 +106,14 @@ int main() {
   CHECK(has_format(image, "PNG"));
   CHECK(has_format(image, "CF_DIBV5"));
 
-  // Bytes that aren't the declared format are passed on, but never decoded into a bitmap
+  // Bytes that aren't the declared format aren't written, or decoded into a bitmap
   std::string bmp = "BM" + std::string(60, '\0');
-  CHECK(write({{"image/png", bmp}}, false) != 0);
+  CHECK(write({{"image/png", bmp}, {"text/plain", "caption"}}, false) != 0);
   snapshot mislabeled;
   CHECK(read(mislabeled));
-  CHECK(has_format(mislabeled, "PNG"));
+  CHECK(!has_format(mislabeled, "PNG"));
   CHECK(!has_format(mislabeled, "CF_DIBV5"));
+  CHECK(find(mislabeled, "text/plain") != nullptr);
 
   // A repeated type keeps the first item
   CHECK(write({{"text/plain", "first"}, {"text/plain", "second"}}, false) != 0);

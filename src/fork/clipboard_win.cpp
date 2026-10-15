@@ -531,8 +531,9 @@ namespace fork_tweaks::clipboard_win {
     std::vector<std::string> seen;
     bool have_dib = false;
     for (const clipbundle::item &it : items) {
-      // One item per type; a repeated type would only replace the first
-      if (std::find(seen.begin(), seen.end(), it.type) != seen.end()) {
+      // One item per type, since a repeated type would only replace the first, and images must be
+      // the format they claim to be
+      if (std::find(seen.begin(), seen.end(), it.type) != seen.end() || !clipbundle::data_matches_type(it.type, it.data)) {
         continue;
       }
       seen.push_back(it.type);
