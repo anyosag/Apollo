@@ -357,19 +357,11 @@ namespace fork_tweaks::clipboard_win {
     }
 
     std::vector<clipbundle::kind> kinds;
-    std::size_t first_text = formats.size(), first_image = formats.size();
-    for (std::size_t i = 0; i < formats.size(); i++) {
-      kinds.push_back(formats[i].kind);
-      if (formats[i].kind == clipbundle::kind::text && first_text == formats.size()) {
-        first_text = i;
-      }
-      if (formats[i].kind == clipbundle::kind::image && first_image == formats.size()) {
-        first_image = i;
-      }
+    bool image_offered = false;
+    for (const offered &f : formats) {
+      kinds.push_back(f.kind);
+      image_offered = image_offered || f.kind == clipbundle::kind::image;
     }
-    // Decided before reading, so an app isn't asked to render a bitmap that won't be sent
-    bool want_image = !out.file_copy && clipbundle::include_image(kinds);
-    bool image_first = want_image && first_image < first_text;
 
     std::vector<std::pair<std::size_t, clipbundle::item>> items;
     std::size_t budget = clipbundle::k_max_raw_bytes;
@@ -383,17 +375,32 @@ namespace fork_tweaks::clipboard_win {
 
     // Plain text first: it's always sent, even for file copies
     std::string raw;
+    std::string plain_text;
     if (IsClipboardFormatAvailable(CF_UNICODETEXT) && read_global(CF_UNICODETEXT, raw)) {
       const wchar_t *text = reinterpret_cast<const wchar_t *>(raw.data());
       std::size_t length = 0;
       while (length < raw.size() / 2 && text[length] != L'\0') {
         length++;
       }
-      std::string utf8 = clipbundle::to_lf(utf16_to_utf8(text, length));
-      if (!utf8.empty()) {
-        add(formats.size(), "text/plain", std::move(utf8));
+      plain_text = clipbundle::to_lf(utf16_to_utf8(text, length));
+      if (!plain_text.empty()) {
+        add(formats.size(), "text/plain", plain_text);
       }
     }
+
+    // The HTML too, which tells a picture copy (a browser's <img> tag) from a text copy
+    std::string html;
+    bool have_html = false;
+    for (const offered &f : formats) {
+      if (f.name == "HTML Format") {
+        have_html = read_global(f.format, raw) && clipbundle::cf_html_parse(raw, html);
+        break;
+      }
+    }
+
+    // Decided before reading any bitmap, so an app isn't asked to render one that won't be sent
+    bool want_image = !out.file_copy && clipbundle::include_image(kinds, plain_text, html);
+    bool image_first = want_image;
 
     std::string dib;
     std::size_t dib_position = 0;
@@ -420,17 +427,21 @@ namespace fork_tweaks::clipboard_win {
         if (image && (!want_image || have_encoded_image)) {
           continue;
         }
+
+        std::string type = info->type;
+        if (type == "text/html") {
+          // Already read for the image rule
+          if (have_html) {
+            add(i, info->type, std::move(html));
+            have_html = false;
+          }
+          continue;
+        }
         if (!read_global(f.format, raw)) {
           continue;
         }
 
-        std::string type = info->type;
-        if (type == "text/html") {
-          std::string html;
-          if (clipbundle::cf_html_parse(raw, html)) {
-            add(i, info->type, std::move(html));
-          }
-        } else if (type == "text/rtf") {
+        if (type == "text/rtf") {
           add(i, info->type, clipbundle::strip_trailing_nuls(raw));
         } else if (type == "image/png") {
           raw.resize(clipbundle::png_length(raw));
@@ -464,6 +475,11 @@ namespace fork_tweaks::clipboard_win {
       out.items.push_back(std::move(entry.second));
     }
     clipbundle::prepare_for_send(out.items, image_first);
+
+    bool image_sent = std::any_of(out.items.begin(), out.items.end(), [](const clipbundle::item &it) {
+      return clipbundle::is_image_type(it.type);
+    });
+    out.image_not_sent = image_offered && !out.file_copy && !image_sent;
     return true;
   }
 
