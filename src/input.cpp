@@ -23,6 +23,7 @@ extern "C" {
 #include "config.h"
 #include "globals.h"
 #include "input.h"
+#include "input_validation.h"
 #include "logging.h"
 #include "platform/common.h"
 #include "thread_pool.h"
@@ -1582,13 +1583,25 @@ namespace input {
       return;
     }
 
+    // Before any field is read: the packet must hold what its header and type say it does
+    NV_INPUT_HEADER header {};
+    if (!validate_input_packet(input_data, &header)) {
+      if (input_data.size() >= sizeof(header)) {
+        BOOST_LOG(warning)
+          << "Dropping malformed input packet type ["sv << util::hex(util::endian::little(header.magic)).to_string_view()
+          << "] with declared payload size ["sv << util::endian::big(header.size)
+          << "] and actual size ["sv << input_data.size() << ']';
+      } else {
+        BOOST_LOG(warning) << "Dropping malformed input packet with actual size ["sv << input_data.size() << ']';
+      }
+      return;
+    }
+
     // Have some input permission
     // Otherwise have all input permission
     if ((permission & crypto::PERM::_all_inputs) != crypto::PERM::_all_inputs) {
-      PNV_INPUT_HEADER payload = (PNV_INPUT_HEADER)input_data.data();
-
       // Check permission
-      switch (util::endian::little(payload->magic)) {
+      switch (util::endian::little(header.magic)) {
         case MULTI_CONTROLLER_MAGIC_GEN5:
         case SS_CONTROLLER_ARRIVAL_MAGIC:
         case SS_CONTROLLER_TOUCH_MAGIC:

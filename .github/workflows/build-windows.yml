@@ -125,6 +125,12 @@ jobs:
             tests/fork/clipboard_win_smoke.cpp src/fork/clipboard_win.cpp src/fork/clipbundle.cpp \
             -lz -lole32 -luser32 -o clipboard_win_smoke
           ./clipboard_win_smoke
+          # Size checks on input and control stream packets from clients
+          g++ -std=c++23 -Wall -Wextra -Isrc -Ithird-party \
+            tests/fork/input_validation_test.cpp -o input_validation_test
+          ./input_validation_test
+          g++ -std=c++23 -Wall -Wextra -Isrc tests/fork/control_packet_test.cpp -o control_packet_test
+          ./control_packet_test
 
       - name: Build
         shell: msys2 {0}

@@ -21,6 +21,7 @@ extern "C" {
 
 // local includes
 #include "config.h"
+#include "control_packet.h"
 #include "crypto.h"
 #include "display_device.h"
 #include "globals.h"
@@ -593,10 +594,11 @@ namespace stream {
           {
             net::packet_t packet {event.packet};
 
-            auto type = *(std::uint16_t *) packet->data;
-            std::string_view payload {(char *) packet->data + sizeof(type), packet->dataLength - sizeof(type)};
-
-            call(type, session, payload, false);
+            // A message too short to hold its type is dropped
+            auto message = control_packet::parse_control_packet(packet->data, packet->dataLength);
+            if (message) {
+              call(message->first, session, message->second, false);
+            }
           }
           break;
         case ENET_EVENT_TYPE_CONNECT:
@@ -978,8 +980,14 @@ namespace stream {
     server->map(packetTypes[IDX_INPUT_DATA], [&](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_INPUT_DATA]"sv;
 
-      auto tagged_cipher_length = util::endian::big(*(int32_t *) payload.data());
-      std::string_view tagged_cipher {payload.data() + sizeof(tagged_cipher_length), (size_t) tagged_cipher_length};
+      // The declared length must fit in the message, so the copy of the last 16 bytes below stays in it too
+      auto legacy_cipher = control_packet::parse_legacy_input(payload);
+      if (!legacy_cipher) {
+        BOOST_LOG(warning) << "Control: Truncated legacy input packet"sv;
+        return;
+      }
+      std::string_view tagged_cipher = *legacy_cipher;
+      auto tagged_cipher_length = tagged_cipher.size();
 
       std::vector<uint8_t> plaintext;
 
@@ -1055,18 +1063,15 @@ namespace stream {
     server->map(packetTypes[IDX_ENCRYPTED], [server](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_ENCRYPTED]"sv;
 
-      auto header = (control_encrypted_p) (payload.data() - 2);
-
-      auto length = util::endian::little(header->length);
-      auto seq = util::endian::little(header->seq);
-
-      if (length < (16 + 4 + 4)) {
-        BOOST_LOG(warning) << "Control: Runt packet"sv;
+      // The declared length must be large enough for the tag and fit in the message
+      auto encrypted = control_packet::parse_encrypted(payload);
+      if (!encrypted) {
+        BOOST_LOG(warning) << "Control: Runt or truncated packet"sv;
         return;
       }
 
-      auto tagged_cipher_length = length - 4;
-      std::string_view tagged_cipher {(char *) header->payload(), (size_t) tagged_cipher_length};
+      auto seq = encrypted->seq;
+      std::string_view tagged_cipher = encrypted->tagged_cipher;
 
       auto &cipher = session->control.cipher;
       auto &iv = session->control.incoming_iv;
@@ -1100,6 +1105,11 @@ namespace stream {
         return;
       }
 
+      // The message inside starts with its type and length
+      if (plaintext.size() < 4) {
+        BOOST_LOG(warning) << "Control: Runt encrypted message"sv;
+        return;
+      }
       auto type = *(std::uint16_t *) plaintext.data();
       std::string_view next_payload {(char *) plaintext.data() + 4, plaintext.size() - 4};
 
