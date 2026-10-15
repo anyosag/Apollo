@@ -5,7 +5,9 @@
 #include "clipbundle.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <new>
 #include <random>
 #include <string>
 #include <vector>
@@ -13,6 +15,38 @@
 using namespace clipbundle;
 
 static int s_Failures = 0;
+static std::size_t s_LargestAllocation = 0;
+
+// Records the largest allocation, so tests can check a bad bundle is refused before allocating for it
+void *operator new(std::size_t size) {
+  if (size > s_LargestAllocation) {
+    s_LargestAllocation = size;
+  }
+  if (void *p = std::malloc(size > 0 ? size : 1)) {
+    return p;
+  }
+  throw std::bad_alloc();
+}
+
+void *operator new(std::size_t size, const std::nothrow_t &) noexcept {
+  try {
+    return operator new(size);
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+void operator delete(void *p) noexcept {
+  std::free(p);
+}
+
+void operator delete(void *p, std::size_t) noexcept {
+  std::free(p);
+}
+
+void operator delete(void *p, const std::nothrow_t &) noexcept {
+  std::free(p);
+}
 
 #define CHECK(cond) \
   do { \
@@ -140,6 +174,25 @@ static void test_corrupt_input() {
   std::string unknown = encode(one, false);
   unknown[unknown.size() - 3 - 4 - 4 - 1] = 7;
   CHECK(!decode(unknown, out));
+
+#ifdef CLIPBUNDLE_WITH_ZLIB
+  // A compressed item claiming more than its bytes can inflate to fails before allocating it
+  bundle zeros;
+  zeros.items = {{"text/plain", std::string(std::size_t(8) << 20, '\0')}};
+  std::string wire_zeros = encode(zeros);
+  CHECK(decode(wire_zeros, out) && same_items(out.items, zeros.items));  // the best ratio deflate gets
+  const std::size_t raw_at = 4 + 2 + 2 + 8 + 1 + 1 + 1 + 10 + 1;  // header, no token, one "text/plain" item
+  const std::size_t stored_size = wire_zeros.size() - raw_at - 8;
+  CHECK(wire_zeros[raw_at - 1] == 1);  // zlib
+  for (std::uint32_t claimed : {static_cast<std::uint32_t>(stored_size * 1032 + 1), static_cast<std::uint32_t>(k_max_raw_bytes)}) {
+    for (int i = 0; i < 4; i++) {
+      wire_zeros[raw_at + i] = static_cast<char>((claimed >> (8 * i)) & 0xFF);
+    }
+    s_LargestAllocation = 0;
+    CHECK(!decode(wire_zeros, out));
+    CHECK(s_LargestAllocation < claimed);
+  }
+#endif
 }
 
 static void test_etag() {
