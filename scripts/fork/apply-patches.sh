@@ -9,6 +9,7 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 # patches/<name> -> the submodule they apply to
 declare -A submodules=(
   [enet]="third-party/moonlight-common-c/enet"
+  [moonlight-common-c]="third-party/moonlight-common-c"
 )
 
 status=0
