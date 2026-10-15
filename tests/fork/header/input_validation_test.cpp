@@ -1,6 +1,6 @@
 // Tests for src/input_validation.h: input packets are checked against their declared and real sizes
 // before any field is read. A standalone program, so CI builds it without the rest of Apollo:
-//   g++ -std=c++23 -Isrc -Ithird-party tests/fork/input_validation_test.cpp
+//   g++ -std=c++23 -Isrc -Ithird-party tests/fork/header/input_validation_test.cpp
 
 #include "input_validation.h"
 

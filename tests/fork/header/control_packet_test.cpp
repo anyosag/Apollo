@@ -1,6 +1,6 @@
 // Tests for src/control_packet.h: control stream messages are split and unwrapped without reading
 // past their end. A standalone program, so CI builds it without the rest of Apollo:
-//   g++ -std=c++23 -Isrc tests/fork/control_packet_test.cpp
+//   g++ -std=c++23 -Isrc -Ithird-party tests/fork/header/control_packet_test.cpp
 
 #include "control_packet.h"
 
