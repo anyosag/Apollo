@@ -128,7 +128,7 @@ jobs:
           # Checks on what clients send, in header-only code; each test is a program of its own
           for test in tests/fork/header/*_test.cpp; do
             name=$(basename "$test" .cpp)
-            g++ -std=c++23 -Wall -Wextra -Isrc -Ithird-party "$test" -o "$name"
+            g++ -std=c++23 -Wall -Wextra -Isrc -Ithird-party "$test" -lcrypto -o "$name"
             "./$name"
           done
 
