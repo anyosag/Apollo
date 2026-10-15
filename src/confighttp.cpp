@@ -30,11 +30,14 @@
 #include "crypto.h"
 #include "display_device.h"
 #include "file_handler.h"
+#include "fork/fork_config.h"  // [fork]
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
+#include "login_throttle.h"
 #include "network.h"
 #include "nvhttp.h"
+#include "password_hash.h"
 #include "platform/common.h"
 #include "process.h"
 #include "utility.h"
@@ -64,6 +67,9 @@ namespace confighttp {
   std::string sessionCookie;
   static std::chrono::time_point<std::chrono::steady_clock> cookie_creation_time;
 
+  /// Failed password attempts per address, for /api/login and /api/password
+  static login_throttle_t login_throttle;
+
   /**
    * @brief Log the request details.
    * @param request The HTTP request object.
@@ -72,7 +78,7 @@ namespace confighttp {
     BOOST_LOG(debug) << "METHOD :: "sv << request->method;
     BOOST_LOG(debug) << "DESTINATION :: "sv << request->path;
     for (auto &[name, val] : request->header) {
-      BOOST_LOG(debug) << name << " -- " << (name == "Authorization" ? "CREDENTIALS REDACTED" : val);
+      BOOST_LOG(debug) << name << " -- " << (boost::iequals(name, "Authorization") || boost::iequals(name, "Cookie") ? "CREDENTIALS REDACTED" : val);
     }
     BOOST_LOG(debug) << " [--] "sv;
     for (auto &[name, val] : request->parse_query_string()) {
@@ -91,6 +97,9 @@ namespace confighttp {
     headers.emplace("Content-Type", "application/json");
     headers.emplace("X-Frame-Options", "DENY");
     headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    // API answers hold config, logs and client lists: keep them out of caches
+    headers.emplace("Cache-Control", "no-store");
+    headers.emplace("X-Content-Type-Options", "nosniff");
     response->write(output_tree.dump(), headers);
   }
 
@@ -162,6 +171,33 @@ namespace confighttp {
     if (ip_type > http::origin_web_ui_allowed) {
       BOOST_LOG(info) << "Web UI: ["sv << address << "] -- denied"sv;
       response->write(SimpleWeb::StatusCode::client_error_forbidden);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * @brief Whether this request may set the first Web UI password, while there are no credentials.
+   * Only this PC may, unless fork_web_ui_remote_first_setup lets the addresses origin_web_ui_allowed
+   * allows do so too; and nobody may while the credentials file exists but can't be read.
+   * Otherwise, whoever reached the Web UI first after installing (or after the file got damaged)
+   * would choose the password, and the Web UI can run commands on this PC.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @return True if allowed; otherwise a response has been sent.
+   */
+  bool checkFirstSetup(resp_https_t response, req_https_t request) {
+    auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    if (http::credentials_unreadable) {
+      BOOST_LOG(error) << "Web UI: ["sv << address << "] -- the credentials file can't be read; set the credentials with --creds"sv;
+      response->write(SimpleWeb::StatusCode::server_error_service_unavailable, "The Web UI credentials file can't be read. Set the credentials again with: sunshine --creds <username> <password>");
+      return false;
+    }
+
+    auto ip_type = net::from_address(address);
+    if (ip_type != net::PC && !(fork_tweaks::web_ui_remote_first_setup && ip_type <= http::origin_web_ui_allowed)) {
+      BOOST_LOG(warning) << "Web UI: ["sv << address << "] -- denied setting the first password; only this PC may"sv;
+      response->write(SimpleWeb::StatusCode::client_error_forbidden, "Set the first Web UI password from the Apollo PC itself (https://localhost), or with: sunshine --creds <username> <password>");
       return false;
     }
     return true;
@@ -443,6 +479,9 @@ namespace confighttp {
 
     if (!config::sunshine.username.empty()) {
       send_redirect(response, request, "/");
+      return;
+    }
+    if (!checkFirstSetup(response, request)) {
       return;
     }
 
@@ -1173,8 +1212,17 @@ namespace confighttp {
    * @api_examples{/api/password| POST| {"currentUsername":"admin","currentPassword":"admin","newUsername":"admin","newPassword":"admin","confirmNewPassword":"admin"}}
    */
   void savePassword(resp_https_t response, req_https_t request) {
-    if ((!config::sunshine.username.empty() && !authenticate(response, request)) || !validateContentType(response, request, "application/json"))
+    if (config::sunshine.username.empty()) {
+      // The first password: authenticate() can't apply, so check where it comes from
+      if (!checkFirstSetup(response, request)) {
+        return;
+      }
+    } else if (!authenticate(response, request)) {
       return;
+    }
+    if (!validateContentType(response, request, "application/json")) {
+      return;
+    }
     print_req(request);
     std::vector<std::string> errors;
     std::stringstream ss;
@@ -1192,9 +1240,13 @@ namespace confighttp {
       if (newUsername.empty()) {
         errors.push_back("Invalid Username");
       } else {
-        auto hash = util::hex(crypto::hash(password + config::sunshine.salt)).to_string();
-        if (config::sunshine.username.empty() ||
-            (boost::iequals(username, config::sunshine.username) && hash == config::sunshine.password)) {
+        auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+        bool first_setup = config::sunshine.username.empty();
+        if (!first_setup && login_throttle.wait_for(address) > std::chrono::steady_clock::duration::zero()) {
+          errors.push_back("Too many wrong passwords; try again later");
+        } else if (first_setup ||
+            (boost::iequals(username, config::sunshine.username) && http::password_hash::verify(config::sunshine.password, password, config::sunshine.salt))) {
+          login_throttle.succeeded(address);
           if (newPassword.empty() || newPassword != confirmPassword)
             errors.push_back("Password Mismatch");
           else {
@@ -1204,6 +1256,7 @@ namespace confighttp {
             output_tree["status"] = true;
           }
         } else {
+          login_throttle.failed(address);
           errors.push_back("Invalid Current Credentials");
         }
       }
@@ -1471,6 +1524,14 @@ namespace confighttp {
       return;
     }
 
+    auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    if (auto wait = login_throttle.wait_for(address); wait > std::chrono::steady_clock::duration::zero()) {
+      auto seconds = std::chrono::ceil<std::chrono::seconds>(wait).count();
+      const SimpleWeb::CaseInsensitiveMultimap headers {{"Retry-After", std::to_string(seconds)}};
+      response->write(SimpleWeb::StatusCode::client_error_too_many_requests, std::format("Too many failed logins; try again in {} seconds", seconds), headers);
+      return;
+    }
+
     auto fg = util::fail_guard([&]{
       response->write(SimpleWeb::StatusCode::client_error_unauthorized);
     });
@@ -1481,14 +1542,25 @@ namespace confighttp {
       nlohmann::json input_tree = nlohmann::json::parse(ss.str());
       std::string username = input_tree.value("username", "");
       std::string password = input_tree.value("password", "");
-      std::string hash = util::hex(crypto::hash(password + config::sunshine.salt)).to_string();
-      if (!boost::iequals(username, config::sunshine.username) || hash != config::sunshine.password)
+      if (!boost::iequals(username, config::sunshine.username) || !http::password_hash::verify(config::sunshine.password, password, config::sunshine.salt)) {
+        login_throttle.failed(address);
+        BOOST_LOG(info) << "Web UI: failed login from ["sv << address << ']';
         return;
+      }
+      login_throttle.succeeded(address);
+
+      // A hash from an earlier version: replace it with a PBKDF2 one now that the password is known
+      if (http::password_hash::is_legacy(config::sunshine.password) &&
+          http::save_user_creds(config::sunshine.credentials_file, config::sunshine.username, password) == 0) {
+        http::reload_user_creds(config::sunshine.credentials_file);
+      }
+
       std::string sessionCookieRaw = crypto::rand_alphabet(64);
       sessionCookie = util::hex(crypto::hash(sessionCookieRaw + config::sunshine.salt)).to_string();
       cookie_creation_time = std::chrono::steady_clock::now();
+      // HttpOnly: no script on this or another page of the host can read the session
       const SimpleWeb::CaseInsensitiveMultimap headers {
-        { "Set-Cookie", "auth=" + sessionCookieRaw + "; Secure; SameSite=Strict; Max-Age=2592000; Path=/" }
+        { "Set-Cookie", "auth=" + sessionCookieRaw + "; Secure; HttpOnly; SameSite=Strict; Max-Age=2592000; Path=/" }
       };
       response->write(headers);
       fg.disable();
@@ -1559,6 +1631,9 @@ namespace confighttp {
     server.config.reuse_address = true;
     server.config.address = net::af_to_any_address_string(address_family);
     server.config.port = port_https;
+    // Requests are read whole before any handler (and its origin check) runs; the largest real one is
+    // a cover image upload
+    server.config.max_request_streambuf_size = 32 << 20;
 
     auto accept_and_run = [&](auto *server) {
       try {

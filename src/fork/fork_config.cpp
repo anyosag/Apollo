@@ -38,5 +38,6 @@ namespace fork_tweaks {
   void apply_config(std::unordered_map<std::string, std::string> &vars) {
     bool_option(vars, "fork_encoder_probe_reuse", encoder_probe_reuse);
     bool_option(vars, "fork_clipboard_rich", clipboard_rich);
+    bool_option(vars, "fork_web_ui_remote_first_setup", web_ui_remote_first_setup);
   }
 }  // namespace fork_tweaks

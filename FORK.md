@@ -40,12 +40,13 @@ Fork code lives in new files: `src/fork/`, `tests/fork/`, `.github/workflows/` a
 
 ## Fork options
 
-In `sunshine.conf`. `apply_config()` reads them and removes them from the option list, so Apollo doesn't report them as unrecognized. Both accept `enabled`/`disabled` (also `true`/`false`, `on`/`off`, `yes`/`no`, `1`/`0`).
+In `sunshine.conf`. `apply_config()` reads them and removes them from the option list, so Apollo doesn't report them as unrecognized. All accept `enabled`/`disabled` (also `true`/`false`, `on`/`off`, `yes`/`no`, `1`/`0`).
 
 | Option | Default | Effect |
 |---|---|---|
 | `fork_encoder_probe_reuse` | `enabled` | Reuse the encoder probe when only the display layout changed |
 | `fork_clipboard_rich` | `enabled` | Rich clipboard sync for LuzLunar; `disabled` answers `type=bundle` with 400, like stock Apollo |
+| `fork_web_ui_remote_first_setup` | `disabled` | Let the first Web UI password be set from the addresses `origin_web_ui_allowed` allows. Off, only the Apollo PC itself (`https://localhost:47990`) can set it, or `sunshine --creds <username> <password>` |
 
 ## Fork features
 

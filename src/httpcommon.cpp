@@ -31,6 +31,8 @@
 #include "process.h"
 #include "rtsp.h"
 #include "utility.h"
+#include "atomic_file.h"
+#include "password_hash.h"
 
 namespace http {
   using namespace std::literals;
@@ -38,11 +40,19 @@ namespace http {
   namespace pt = boost::property_tree;
 
   int reload_user_creds(const std::string &file);
-  bool user_creds_exist(const std::string &file);
+
+  /// What the credentials file holds
+  enum class creds_state_e {
+    missing,  ///< No file, or a file (the state file) without credentials: the Web UI sets the first ones
+    valid,  ///< Username, password and salt
+    unreadable,  ///< A file that isn't JSON, or holds only some of the three
+  };
+  creds_state_e user_creds_state(const std::string &file);
 
   std::string unique_id;
   uuid_util::uuid_t uuid;
   net::net_e origin_web_ui_allowed;
+  bool credentials_unreadable = false;
 
   int init() {
     bool clean_slate = config::sunshine.flags[config::flag::FRESH_STATE];
@@ -60,59 +70,86 @@ namespace http {
         create_creds(config::nvhttp.pkey, config::nvhttp.cert)) {
       return -1;
     }
-    if (!user_creds_exist(config::sunshine.credentials_file)) {
-      BOOST_LOG(info) << "Open the Web UI to set your new username and password and getting started";
-    } else if (reload_user_creds(config::sunshine.credentials_file)) {
-      return -1;
+    switch (user_creds_state(config::sunshine.credentials_file)) {
+      case creds_state_e::missing:
+        BOOST_LOG(info) << "Open the Web UI to set your new username and password and getting started";
+        break;
+      case creds_state_e::valid:
+        if (reload_user_creds(config::sunshine.credentials_file)) {
+          return -1;
+        }
+        break;
+      case creds_state_e::unreadable:
+        // Starting over would let anyone who reaches the Web UI first choose the password
+        credentials_unreadable = true;
+        BOOST_LOG(error) << "The Web UI credentials in "sv << config::sunshine.credentials_file
+                         << " can't be read. Set them again with: sunshine --creds <username> <password>"sv;
+        break;
     }
     return 0;
   }
 
   int save_user_creds(const std::string &file, const std::string &username, const std::string &password, bool run_our_mouth) {
-    nlohmann::json outputTree;
+    nlohmann::json outputTree = nlohmann::json::object();
 
     if (fs::exists(file)) {
       try {
         std::ifstream in(file);
         in >> outputTree;
       } catch (std::exception &e) {
-        BOOST_LOG(error) << "Couldn't read user credentials: "sv << e.what();
-        return -1;
+        // Set the damaged file aside (it may hold paired clients worth recovering) and start a new
+        // one, so --creds can always restore access
+        auto aside = file + ".unreadable";
+        std::error_code ec;
+        fs::rename(file, aside, ec);
+        BOOST_LOG(error) << "Couldn't read "sv << file << " ("sv << e.what() << "); "sv
+                         << (ec ? "starting a new one"s : "moved it to "s + aside + " and started a new one"s);
+        outputTree = nlohmann::json::object();
       }
     }
 
     auto salt = crypto::rand_alphabet(16);
+    auto hash = password_hash::hash(password, salt);
+    if (hash.empty()) {
+      BOOST_LOG(error) << "Couldn't hash the new password"sv;
+      return -1;
+    }
     outputTree["username"] = username;
     outputTree["salt"] = salt;
-    outputTree["password"] = util::hex(crypto::hash(password + salt)).to_string();
-    try {
-      std::ofstream out(file);
-      out << outputTree.dump(4);  // Pretty-print with an indent of 4 spaces.
-    } catch (std::exception &e) {
-      BOOST_LOG(error) << "error writing to the credentials file, perhaps try this again as an administrator? Details: "sv << e.what();
+    outputTree["password"] = hash;
+
+    // Replaced in one step, so a crash can't leave half a file (which would read as damaged)
+    if (!file_handler::write_file_atomic(file, outputTree.dump(4), true)) {
+      BOOST_LOG(error) << "error writing to the credentials file, perhaps try this again as an administrator?"sv;
       return -1;
     }
 
+    credentials_unreadable = false;
     BOOST_LOG(info) << "New credentials have been created"sv;
     return 0;
   }
 
-  bool user_creds_exist(const std::string &file) {
+  creds_state_e user_creds_state(const std::string &file) {
     if (!fs::exists(file)) {
-      return false;
+      return creds_state_e::missing;
     }
 
     pt::ptree inputTree;
     try {
       pt::read_json(file, inputTree);
-      return inputTree.find("username") != inputTree.not_found() &&
-             inputTree.find("password") != inputTree.not_found() &&
-             inputTree.find("salt") != inputTree.not_found();
     } catch (std::exception &e) {
       BOOST_LOG(error) << "validating user credentials: "sv << e.what();
+      return creds_state_e::unreadable;
     }
 
-    return false;
+    int present = 0;
+    for (const char *key : {"username", "password", "salt"}) {
+      present += inputTree.find(key) != inputTree.not_found();
+    }
+    if (present == 0) {
+      return creds_state_e::missing;  // the state file, before the first password is set
+    }
+    return present == 3 ? creds_state_e::valid : creds_state_e::unreadable;
   }
 
   int reload_user_creds(const std::string &file) {
