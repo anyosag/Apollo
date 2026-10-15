@@ -1,0 +1,42 @@
+diff --git a/protocol.c b/protocol.c
+index f5301fc..3f86280 100644
+--- a/protocol.c
++++ b/protocol.c
+@@ -1007,6 +1007,28 @@ enet_protocol_handle_verify_connect (ENetHost * host, ENetEvent * event, ENetPee
+     return 0;
+ }
+ 
++/* The same host (address family and IP) whatever the port: a peer's port may change when a NAT rebinds,
++   but a packet from another host must not take over the peer and redirect its traffic */
++static int
++enet_address_host_equal (const ENetAddress * address1, const ENetAddress * address2)
++{
++    if (address1 -> address.ss_family != address2 -> address.ss_family)
++      return 0;
++
++    switch (address1 -> address.ss_family)
++    {
++    case AF_INET:
++        return ((const struct sockaddr_in *) & address1 -> address) -> sin_addr.s_addr ==
++               ((const struct sockaddr_in *) & address2 -> address) -> sin_addr.s_addr;
++    case AF_INET6:
++        return memcmp (& ((const struct sockaddr_in6 *) & address1 -> address) -> sin6_addr,
++                       & ((const struct sockaddr_in6 *) & address2 -> address) -> sin6_addr,
++                       sizeof (struct in6_addr)) == 0;
++    default:
++        return 0;
++    }
++}
++
+ static int
+ enet_protocol_handle_incoming_commands (ENetHost * host, ENetEvent * event)
+ {
+@@ -1043,7 +1065,7 @@ enet_protocol_handle_incoming_commands (ENetHost * host, ENetEvent * event)
+ 
+        if (peer -> state == ENET_PEER_STATE_DISCONNECTED ||
+            peer -> state == ENET_PEER_STATE_ZOMBIE ||
+-           /* ! enet_address_equal(& host -> receivedAddress, & peer -> address) || */
++           ! enet_address_host_equal (& host -> receivedPeerAddress, & peer -> address) ||
+            (peer -> outgoingPeerID < ENET_PROTOCOL_MAXIMUM_PEER_ID &&
+             sessionID != peer -> incomingSessionID))
+          return 0;

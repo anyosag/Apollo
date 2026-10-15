@@ -36,6 +36,11 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      # Fixes the fork carries in submodules it doesn't own (patches/, see FORK.md)
+      - name: Apply submodule patches
+        shell: bash
+        run: bash scripts/fork/apply-patches.sh
+
       # Version is the latest upstream release plus the number of commits since it,
       # e.g. 0.4.8.26, so Apollo's update check compares correctly against upstream releases.
       - name: Determine version

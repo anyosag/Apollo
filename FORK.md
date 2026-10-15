@@ -37,6 +37,12 @@ Fork code lives in new files: `src/fork/`, `tests/fork/`, `.github/workflows/` a
 ### Upstream fixes carried by the fork
 
 - `src/video.cpp`: the AMF H.264 `profile` option is removed (commit `b063ddaf`). Upstream added it reading `cfg.profile`, which `video::config_t` doesn't have, so upstream `master` doesn't compile on Windows. Drop this change once upstream fixes it.
+- `patches/<name>/*.patch` are fixes to submodules this fork doesn't own. `scripts/fork/apply-patches.sh` applies them (the Windows build runs it right after checkout; run it by hand before a local build). A patch that no longer applies fails the build, so a submodule update can't drop a fix silently.
+  - `patches/enet/0001-only-the-peer-s-host-may-send-for-it.patch`: ENet ignored where a packet came from, so anyone who could reach the control stream port and guess a peer's 2-bit session ID could take over the peer's address and have the host send its control traffic there. Now only the peer's own host (IP) may send for it; its port may still change, as it does when a NAT rebinds.
+- Windows install and service hardening:
+  - The installer gives the install folder its own permissions before copying any file (owner Administrators; SYSTEM and Administrators full control, Users read and run) and limits `config\` to SYSTEM and Administrators. The service runs as SYSTEM from that folder, so in a folder like `C:\Apollo` other users could otherwise replace its files. A DLL another user had placed in a pre-existing custom folder would stay there, so install to the default `Program Files` location.
+  - The firewall rules apply to Private and Domain networks only. If streaming stops at home, set the home network to Private in Windows' network settings.
+  - The NVIDIA settings undo file's folder (`%ProgramData%\Sunshine`) is SYSTEM and Administrators only, and an existing one is used only if SYSTEM or Administrators own it and it isn't a link. Users no longer get write and delete on the undo file, which the service reads and deletes.
 
 ## Fork options
 
