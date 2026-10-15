@@ -101,6 +101,9 @@ namespace nvhttp {
   };
 
   struct pair_session_t {
+    /// When pairing started; a session waiting longer than the pairing timeout is dropped
+    std::chrono::steady_clock::time_point created = std::chrono::steady_clock::now();
+
     struct {
       std::string uniqueID = {};
       std::string cert = {};
