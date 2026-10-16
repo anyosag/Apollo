@@ -32,4 +32,8 @@ namespace http {
   extern uuid_util::uuid_t uuid;
   extern net::net_e origin_web_ui_allowed;
 
+  /// The credentials file exists but couldn't be read, or holds only part of the credentials. The
+  /// Web UI then refuses to set a first password (it would replace credentials that are there).
+  extern bool credentials_unreadable;
+
 }  // namespace http
