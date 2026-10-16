@@ -127,6 +127,8 @@ jobs:
       - name: Fork unit tests
         shell: msys2 {0}
         run: |
+          # Stop at the first failing test or header, whatever flags the MSYS2 shell runs with
+          set -eo pipefail
           g++ -std=c++17 -Wall -Wextra -DCLIPBUNDLE_WITH_ZLIB -Isrc/fork \
             tests/fork/clipbundle_test.cpp src/fork/clipbundle.cpp -lz -o clipbundle_test
           ./clipbundle_test
@@ -139,6 +141,11 @@ jobs:
             name=$(basename "$test" .cpp)
             g++ -std=c++23 -Wall -Wextra -iquote src -Ithird-party "$test" -lcrypto -o "$name"
             "./$name"
+          done
+          # Each fork header on its own with the build's include paths (the repository root and
+          # third-party; the tests above also have src/), so one that builds only in the tests fails here
+          for header in src/fork/*.h; do
+            echo "#include \"$header\"" | g++ -std=c++23 -fsyntax-only -iquote . -Ithird-party -x c++ -
           done
 
       - name: Build

@@ -130,3 +130,4 @@ In `sunshine.conf`. `apply_config()` reads them and removes them from the option
 - `clipbundle_test.cpp`: the bundle format and send rules (shared with LuzLunar).
 - `clipboard_win_smoke.cpp`: a round trip through the real Windows clipboard; it skips when the runner has no clipboard.
 - `header/*_test.cpp`: one program each for header-only code: what clients send (`client_args`), control packets, input packets, Web UI login, the virtual display's mode (`vdisplay_mode`), the client's screen (`client_display`), the driver's requests built from it (`luzvda_desc`) and the isolated layout (`display_layout`, including the random desktops above).
+- Each `src/fork/*.h` is also compiled on its own with the build's include paths: the repository root and `third-party`, not `src/`, which the header tests have. A fork header includes its siblings by bare name (`"vdisplay_mode.h"`).
