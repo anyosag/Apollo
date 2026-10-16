@@ -457,7 +457,18 @@ namespace rtsp_stream {
       auto socket = std::move(next_socket);
 
       auto launch_session {launch_event.view(0s)};
-      if (launch_session) {
+      boost::system::error_code endpoint_ec;
+      auto peer = socket->sock.remote_endpoint(endpoint_ec);
+      auto peer_address = endpoint_ec ? std::string() : net::addr_to_normalized_string(peer.address());
+      if (launch_session && !launch_session->client_address.empty() && peer_address != launch_session->client_address) {
+        // Only the client that launched may take the pending session; anyone else connecting first
+        // would get its stream configuration (and, without encrypted RTSP, its stream)
+        BOOST_LOG(warning) << "RTSP connection from ["sv << peer_address << "] isn't the client that launched the session ["sv
+                           << launch_session->client_address << "]; closing it"sv;
+
+        boost::system::error_code ec;
+        socket->sock.close(ec);
+      } else if (launch_session) {
         // Associate the current RTSP session with this socket and start reading
         socket->session = launch_session;
         socket->read();
