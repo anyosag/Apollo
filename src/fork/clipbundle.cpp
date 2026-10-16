@@ -24,6 +24,7 @@ namespace clipbundle {
     constexpr std::uint8_t k_enc_raw = 0;
     constexpr std::uint8_t k_enc_zlib = 1;
     constexpr std::size_t k_min_compress = 1024;
+    constexpr std::uint64_t k_max_zlib_ratio = 1032;  ///< Deflate can't expand data more than this
 
     const char *const k_start_fragment = "<!--StartFragment-->";
     const char *const k_end_fragment = "<!--EndFragment-->";
@@ -319,6 +320,10 @@ namespace clipbundle {
         it.data = std::string(stored);
       } else if (encoding == k_enc_zlib) {
 #ifdef CLIPBUNDLE_WITH_ZLIB
+        // A raw size the stored bytes can't inflate to would allocate memory for nothing
+        if (raw_size > stored_size * k_max_zlib_ratio) {
+          return fail(error, "bad compressed item");
+        }
         it.data.resize(raw_size);
         uLongf size = raw_size;
         int status = uncompress(reinterpret_cast<Bytef *>(raw_size > 0 ? &it.data[0] : nullptr), &size, reinterpret_cast<const Bytef *>(stored.data()), static_cast<uLong>(stored.size()));
@@ -449,6 +454,16 @@ namespace clipbundle {
 
   bool is_office_type(std::string_view type) {
     return type.substr(0, 3) == "ms/";
+  }
+
+  bool data_matches_type(std::string_view type, std::string_view data) {
+    if (type == "image/png") {
+      return data.substr(0, 8) == std::string_view("\x89PNG\r\n\x1a\n", 8);
+    }
+    if (type == "image/jpeg") {
+      return data.substr(0, 3) == std::string_view("\xFF\xD8\xFF", 3);
+    }
+    return !is_image_type(type);
   }
 
   std::string to_lf(std::string_view text) {

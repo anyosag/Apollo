@@ -73,6 +73,8 @@ namespace clipbundle {
   bool is_text_type(std::string_view type);  ///< text/plain, text/rtf, text/html
   bool is_image_type(std::string_view type);  ///< image/*
   bool is_office_type(std::string_view type);  ///< ms/*
+  /** False for an image whose bytes don't start with its type's signature, so a paste can't be handed another format */
+  bool data_matches_type(std::string_view type, std::string_view data);
 
   std::string to_lf(std::string_view text);  ///< CRLF and lone CR to LF
   std::string to_crlf(std::string_view text);  ///< LF to CRLF
