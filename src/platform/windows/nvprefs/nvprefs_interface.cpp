@@ -73,6 +73,12 @@ namespace nvprefs {
       return false;
     }
 
+    // An existing folder is used only if it's trusted (see prepare_undo_folder)
+    std::error_code ec;
+    if (std::filesystem::exists(pimpl->undo_folder_path, ec) && !prepare_undo_folder(pimpl->undo_folder_path)) {
+      return false;
+    }
+
     // Check for undo file from previous improper termination
     bool access_denied = false;
     if (auto undo_file = undo_file_t::open_existing_file(pimpl->undo_file_path, access_denied)) {
@@ -142,9 +148,8 @@ namespace nvprefs {
     auto make_undo_and_commit = [&]() -> bool {
       // Create and lock undo file if it hasn't been done yet
       if (!pimpl->undo_file) {
-        // Prepare Sunshine folder in ProgramData if it doesn't exist
-        if (!CreateDirectoryW(pimpl->undo_folder_path.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
-          error_message("Couldn't create undo folder");
+        // Prepare Sunshine folder in ProgramData: SYSTEM and Administrators only
+        if (!prepare_undo_folder(pimpl->undo_folder_path)) {
           return false;
         }
 

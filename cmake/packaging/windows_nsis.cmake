@@ -3,18 +3,31 @@
 
 set(CPACK_NSIS_INSTALLED_ICON_NAME "${PROJECT__DIR}\\\\${PROJECT_EXE}")
 
+# Extra commands before the files are installed
+# The service runs as SYSTEM from the install directory, and the install commands below run scripts
+# from it as an administrator, so nobody else may write to it from the start. Under Program Files that
+# comes from the parent; in a folder like C:\Apollo, other users could otherwise write, or have made
+# the folder themselves. Administrators take ownership (the creator loses control), every ACL is reset
+# to inherited (dropping explicit grants), then the folder gets its own: SYSTEM and Administrators full
+# control, Users read and run. SIDs, since group names are localized.
+SET(CPACK_NSIS_EXTRA_PREINSTALL_COMMANDS
+        "${CPACK_NSIS_EXTRA_PREINSTALL_COMMANDS}
+        CreateDirectory \\\"$INSTDIR\\\"
+        nsExec::ExecToLog 'icacls \\\"$INSTDIR\\\" /setowner *S-1-5-32-544 /T /C /Q'
+        nsExec::ExecToLog 'icacls \\\"$INSTDIR\\\" /reset /T /C /Q'
+        nsExec::ExecToLog 'icacls \\\"$INSTDIR\\\" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-32-545:(OI)(CI)RX /C /Q'
+        ")
+
 # Extra install commands
-# Restores permissions on the install directory
 # Migrates config files from the root into the new config folder
+# Keeps config (pairings, Web UI credentials, apps) to SYSTEM and Administrators
 # Install service
 SET(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
         "${CPACK_NSIS_EXTRA_INSTALL_COMMANDS}
-        IfSilent +2 0
-        # ExecShell 'open' 'https://docs.lizardbyte.dev/projects/sunshine'
-        nsExec::ExecToLog 'icacls \\\"$INSTDIR\\\" /reset'
         nsExec::ExecToLog '\\\"$INSTDIR\\\\scripts\\\\update-path.bat\\\" add'
         nsExec::ExecToLog '\\\"$INSTDIR\\\\drivers\\\\sudovda\\\\install.bat\\\"'
         nsExec::ExecToLog '\\\"$INSTDIR\\\\scripts\\\\migrate-config.bat\\\"'
+        nsExec::ExecToLog 'icacls \\\"$INSTDIR\\\\config\\\" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F /C /Q'
         nsExec::ExecToLog '\\\"$INSTDIR\\\\scripts\\\\add-firewall-rule.bat\\\"'
         nsExec::ExecToLog \
           'powershell.exe -NoProfile -ExecutionPolicy Bypass -File \\\"$INSTDIR\\\\scripts\\\\install-gamepad.ps1\\\"'

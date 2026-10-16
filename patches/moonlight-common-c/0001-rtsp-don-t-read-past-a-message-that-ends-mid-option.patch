@@ -1,0 +1,18 @@
+diff --git a/src/RtspParser.c b/src/RtspParser.c
+index 208d853..083cffb 100644
+--- a/src/RtspParser.c
++++ b/src/RtspParser.c
+@@ -167,7 +167,12 @@ int parseRtspMessage(PRTSP_MESSAGE msg, char* rtspMessage, int length) {
+ 
+                 // Check if we're at the end of the message portion marked by \r\n\r\n
+                 // endCheck points to the remainder of messageBuffer after the token
+-                endCheck = &token[0] + strlen(token) + 1;
++                endCheck = &token[0] + strlen(token);
++                if (endCheck >= messageBuffer + length) {
++                    // The token runs to the end of the buffer, so no CRLF follows it
++                    break;
++                }
++                endCheck++;
+ 
+                 // See if we've hit the end of the message. The first \r is missing because it's been tokenized
+                 if (startsWith(endCheck, "\n") && endCheck[1] == '\0') {
