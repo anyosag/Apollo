@@ -154,9 +154,34 @@ static void test_describe_defaults() {
   // A stream mode out of range leaves 1080p60
   d = describe(std::nullopt, {100, 100, 60000});
   CHECK((d.modes.size() == 1 && d.modes[0] == display_mode_t {1920, 1080, 60000}));
+
+  // Modes the driver would refuse, failing the whole display, are left out: over its pixel rate,
+  // and over 500 Hz
+  d = describe(std::nullopt, {7680, 4320, 480000});
+  CHECK((d.modes.size() == 1 && d.modes[0] == display_mode_t {7680, 4320, 60000}));
+  d = describe(std::nullopt, {1920, 1080, 1000000});
+  CHECK((d.modes.size() == 1 && d.modes[0] == display_mode_t {1920, 1080, 60000}));
+  for (const auto &mode : describe(parse(args(macbook())), {3024, 1964, 120000}).modes) {
+    CHECK((uint64_t) mode.width * mode.height * mode.refresh_mhz / 1000 <= max_pixels_per_second);
+  }
+}
+
+static void test_summary() {
+  auto s = parse(args(macbook()));
+  CHECK(summary(*s) == "3024x1964 (3024x1890 below the notch), 302x196 mm, 120 Hz, P3, HDR 1600/1000 nits, EDR headroom 16.00");
+
+  auto m = macbook();
+  m.erase("luzSafe");
+  m.erase("luzMm");
+  m.erase("luzHz");
+  m["luzHdr"] = "none";
+  m["luzGamut"] = "srgb";
+  m["luzEdr"] = "105";
+  CHECK(summary(*parse(args(m))) == "3024x1964, sRGB, SDR, EDR headroom 1.05");
 }
 
 int main() {
+  test_summary();
   test_parse();
   test_parse_rejects();
   test_describe_macbook();

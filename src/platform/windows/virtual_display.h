@@ -4,13 +4,7 @@
 #include <string>
 #include <vector>
 
-#ifndef FILE_DEVICE_UNKNOWN
-#define FILE_DEVICE_UNKNOWN 0x00000022
-#endif
-
-#include <ddk/d4iface.h>
-#include <ddk/d4drvif.h>
-#include <sudovda/sudovda.h>
+#include <luzvda/luzvda.h>
 
 namespace VDISPLAY {
 	enum class DRIVER_STATUS {
@@ -21,7 +15,7 @@ namespace VDISPLAY {
 		WATCHDOG_FAILED      = -3
 	};
 
-	extern HANDLE SUDOVDA_DRIVER_HANDLE;
+	extern HANDLE LUZVDA_DRIVER_HANDLE;
 
 	LONG changeDisplaySettings(const wchar_t* deviceName, int width, int height, int refresh_rate);
 	LONG changeDisplaySettings2(const wchar_t* deviceName, int width, int height, int refresh_rate, bool bApplyIsolated=false);
@@ -46,13 +40,13 @@ namespace VDISPLAY {
 	// [fork] The named adapter, or without a name the hardware GPU with the most dedicated memory
 	bool setRenderAdapter(const std::string& adapterName);
 
-	std::wstring createVirtualDisplay(
-		const char* s_client_uid,
-		const char* s_client_name,
-		uint32_t width,
-		uint32_t height,
-		uint32_t fps,
-		const GUID& guid
-	);
+	// [fork] Adds the display LuzVDA is asked for (fork/luzvda_desc.h) and returns its GDI name once
+	// Windows has given it one, or an empty name. A display already there with this GUID but
+	// another description is removed and added again.
+	std::wstring createVirtualDisplay(const LUZVDA_DISPLAY_DESC& desc);
+	// [fork] Gives a display new modes; Windows only offers those it also had when it arrived
+	bool updateVirtualDisplayModes(const LUZVDA_UPDATE_MODES& update);
 	bool removeVirtualDisplay(const GUID& guid);
+	// [fork] Removes every display the driver has; returns how many
+	int removeAllVirtualDisplays();
 }

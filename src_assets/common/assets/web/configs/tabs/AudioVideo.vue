@@ -17,7 +17,7 @@ const props = defineProps([
   'min_fps_factor',
 ])
 
-const sudovdaStatus = {
+const vdisplayDriverStatus = {
   '1': 'Unknown',
   '0': 'Ready',
   '-1': 'Uninitialized',
@@ -25,7 +25,7 @@ const sudovdaStatus = {
   '-3': 'Watchdog Failed'
 }
 
-const currentDriverStatus = computed(() => sudovdaStatus[props.vdisplay])
+const currentDriverStatus = computed(() => vdisplayDriverStatus[props.vdisplay])
 
 const config = ref(props.config)
 
@@ -170,11 +170,11 @@ const validateFallbackMode = (event) => {
               v-if="platform === 'windows'"
     ></Checkbox>
 
-    <!-- SudoVDA Driver Status -->
+    <!-- LuzVDA Driver Status -->
     <div class="alert" :class="[vdisplay ? 'alert-warning' : 'alert-success']" v-if="platform === 'windows'">
-      <i class="fa-solid fa-xl fa-circle-info"></i> SudoVDA Driver status: {{currentDriverStatus}}
+      <i class="fa-solid fa-xl fa-circle-info"></i> LuzVDA virtual display driver status: {{currentDriverStatus}}
     </div>
-    <div class="form-text" v-if="platform === 'windows' && vdisplay">Please ensure SudoVDA driver is installed to the latest version and enabled properly.</div>
+    <div class="form-text" v-if="platform === 'windows' && vdisplay">Please ensure the LuzVDA driver from this Apollo's installer is installed and enabled. It needs Windows 11 24H2 or later.</div>
 
   </div>
 </template>

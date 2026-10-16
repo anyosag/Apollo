@@ -8,9 +8,11 @@
 #include <atomic>
 #include <memory>
 #include <list>
+#include <optional>
 
 // local includes
 #include "crypto.h"
+#include "fork/client_display.h"
 #include "thread_safe.h"
 
 #ifdef _WIN32
@@ -58,6 +60,9 @@ namespace rtsp_stream {
 
     std::list<crypto::command_entry_t> client_do_cmds;
     std::list<crypto::command_entry_t> client_undo_cmds;
+
+    /// [fork] The screen a LuzLunar client streams to, for the virtual display; none from other clients
+    std::optional<client_display::screen_t> client_screen;
 
   #ifdef _WIN32
     GUID display_guid{};

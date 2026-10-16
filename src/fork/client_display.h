@@ -67,6 +67,8 @@ namespace client_display {
   constexpr uint32_t max_dimension = 8192;
   constexpr uint32_t max_size_mm = 2000;
   constexpr uint32_t max_hz = 500;
+  /// The driver refuses a display with any mode faster than this: 7680x4320 at 240 Hz, with room
+  constexpr uint64_t max_pixels_per_second = 8000000000ull;
   constexpr uint32_t max_nits = 10000;
   constexpr std::size_t max_name_bytes = 63;
   constexpr std::size_t max_modes = 32;
@@ -209,6 +211,36 @@ namespace client_display {
     return s;
   }
 
+  /// One line for the log: "3024x1964 (3024x1890 below the notch), 302x196 mm, 120 Hz, P3, HDR 1600/1000 nits"
+  inline std::string summary(const screen_t &s) {
+    std::string out = std::to_string(s.panel_width) + 'x' + std::to_string(s.panel_height);
+    if (s.safe_width != s.panel_width || s.safe_height != s.panel_height) {
+      out += " (" + std::to_string(s.safe_width) + 'x' + std::to_string(s.safe_height) + " below the notch)";
+    }
+    if (s.width_mm) {
+      out += ", " + std::to_string(s.width_mm) + 'x' + std::to_string(s.height_mm) + " mm";
+    }
+    if (s.max_hz) {
+      out += ", " + std::to_string(s.max_hz) + " Hz";
+    }
+    out += s.p3 ? ", P3" : ", sRGB";
+    switch (s.hdr) {
+      case hdr_e::none:
+        out += ", SDR";
+        break;
+      case hdr_e::unknown:
+        out += ", HDR of unknown brightness";
+        break;
+      case hdr_e::known:
+        out += ", HDR " + std::to_string(s.peak_nits) + '/' + std::to_string(s.full_frame_nits) + " nits";
+        break;
+    }
+    if (s.edr_x100) {
+      out += ", EDR headroom " + std::to_string(s.edr_x100 / 100) + '.' + (s.edr_x100 % 100 < 10 ? "0" : "") + std::to_string(s.edr_x100 % 100);
+    }
+    return out;
+  }
+
   /**
    * @brief The virtual display for a stream: the client's screen if it described one, with the
    * stream's mode first, then the screen's other shapes, each at the stream's rate, the screen's
@@ -261,7 +293,8 @@ namespace client_display {
 
     auto add = [&](uint32_t w, uint32_t h, uint32_t mhz) {
       vdisplay_mode::display_mode_t m {w, h, mhz};
-      if (!dimension_ok(w, h) || d.modes.size() >= max_modes || std::find(d.modes.begin(), d.modes.end(), m) != d.modes.end()) {
+      bool too_fast = (uint64_t) w * h * mhz / 1000 > max_pixels_per_second;
+      if (!dimension_ok(w, h) || mhz < 1000 || mhz > max_hz * 1000 || too_fast || d.modes.size() >= max_modes || std::find(d.modes.begin(), d.modes.end(), m) != d.modes.end()) {
         return;
       }
       d.modes.push_back(m);

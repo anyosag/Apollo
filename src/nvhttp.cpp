@@ -487,6 +487,18 @@ namespace nvhttp {
     launch_session->virtual_display = util::from_view(get_arg(args, "virtualDisplay", "0")) || named_cert_p->always_use_virtual_display;
     launch_session->scale_factor = util::from_view(get_arg(args, "scaleFactor", "100"));
 
+    // [fork] The screen LuzLunar streams to, which the virtual display then describes
+    launch_session->client_screen = client_display::parse([&args](std::string_view key) -> std::optional<std::string> {
+      auto it = args.find(std::string(key));
+      if (it == args.end()) {
+        return std::nullopt;
+      }
+      return it->second;
+    });
+    if (launch_session->client_screen) {
+      BOOST_LOG(info) << "Client ["sv << launch_session->device_name << "] streams to "sv << client_display::summary(*launch_session->client_screen);
+    }
+
     launch_session->client_do_cmds = named_cert_p->do_cmds;
     launch_session->client_undo_cmds = named_cert_p->undo_cmds;
 

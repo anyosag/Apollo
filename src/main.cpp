@@ -24,6 +24,9 @@
 #include "video.h"
 
 #ifdef _WIN32
+  #include <cstring>
+
+  #include "fork/luzvda_desc.h"
   #include "platform/windows/misc.h"
   #include "platform/windows/virtual_display.h"
 #endif
@@ -369,15 +372,10 @@ int main(int argc, char *argv[]) {
       // [fork] The configured adapter, or else the GPU with the most video memory
       VDISPLAY::setRenderAdapter(config::video.adapter_name);
 
-      // [fork] The rate is in millihertz, like everywhere else
-      VDISPLAY::createVirtualDisplay(
-        probe_uuid_str.c_str(),
-        "Probe",
-        800,
-        600,
-        60000,
-        *probe_guid
-      );
+      // [fork] An 800x600 display at 60 Hz, described as SudoVDA's displays were
+      luzvda_desc::guid_bytes_t guid_bytes;
+      std::memcpy(guid_bytes.data(), probe_guid, guid_bytes.size());
+      VDISPLAY::createVirtualDisplay(luzvda_desc::display(client_display::describe(std::nullopt, {800, 600, 60000}), "Probe", guid_bytes));
 
       std::this_thread::sleep_for(500ms);
 

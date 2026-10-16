@@ -26,6 +26,7 @@
 
 // local includes
 #include "config.h"
+#include "fork/client_display.h"
 #include "fork/vdisplay_mode.h"
 #include "platform/common.h"
 #include "rtsp.h"
@@ -185,7 +186,10 @@ namespace proc {
     std::string _vdisplay_uuid;
     std::string _vdisplay_client_name;
 
-    bool setup_virtual_display(const vdisplay_mode::display_mode_t &mode, const GUID &guid, bool apply_mode);
+    /// [fork] What the driver was last asked for, to tell on resume whether the screen changed
+    LUZVDA_DISPLAY_DESC _vdisplay_desc {};
+
+    bool setup_virtual_display(const vdisplay_mode::display_mode_t &mode, const std::optional<client_display::screen_t> &screen, const GUID &guid, bool apply_mode);
     void apply_virtual_display_hdr(const std::string &display, bool enable_hdr, bool record_initial);
 #endif
   };

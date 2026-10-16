@@ -39,6 +39,11 @@
 #include "uuid.h"
 
 #ifdef _WIN32
+  #include <cstring>
+
+  // [fork] The LuzVDA driver's requests
+  #include "fork/luzvda_desc.h"
+
   // from_utf8() string conversion function
   #include "platform/windows/misc.h"
   #include "platform/windows/utils.h"
@@ -297,7 +302,7 @@ namespace proc {
         _vdisplay_client_name = device_name;
 
         // Don't change display settings when no params are given
-        setup_virtual_display(vdisplay_target, launch_session->display_guid, launch_session->fps != 0);
+        setup_virtual_display(vdisplay_target, launch_session->client_screen, launch_session->display_guid, launch_session->fps != 0);
 
         // No matter we get the display name or not, the virtual display might still be created.
         // We need to track it properly to remove the display when the session terminates.
@@ -514,28 +519,31 @@ namespace proc {
   }
 
 #ifdef _WIN32
-  // [fork] Creates the virtual display, sets its mode and, if configured, the isolated layout,
-  // and makes it the display Apollo captures
-  bool proc_t::setup_virtual_display(const vdisplay_mode::display_mode_t &mode, const GUID &guid, bool apply_mode) {
-    std::wstring vdisplayName = VDISPLAY::createVirtualDisplay(
-      _vdisplay_uuid.c_str(),
-      _vdisplay_client_name.c_str(),
-      mode.width,
-      mode.height,
-      mode.refresh_mhz,
-      guid
-    );
+  // [fork] Creates the virtual display, describing the client's screen when it sent one, sets its
+  // mode and, if configured, the isolated layout, and makes it the display Apollo captures
+  bool proc_t::setup_virtual_display(const vdisplay_mode::display_mode_t &mode, const std::optional<client_display::screen_t> &screen, const GUID &guid, bool apply_mode) {
+    luzvda_desc::guid_bytes_t guid_bytes;
+    std::memcpy(guid_bytes.data(), &guid, guid_bytes.size());
+    auto desc = luzvda_desc::display(client_display::describe(screen, mode), _vdisplay_client_name, guid_bytes);
 
+    std::wstring vdisplayName = VDISPLAY::createVirtualDisplay(desc);
     if (vdisplayName.empty()) {
       BOOST_LOG(warning) << "Virtual Display creation failed, or cannot get created display name in time!";
       return false;
     }
+    _vdisplay_desc = desc;
 
     BOOST_LOG(info) << "Virtual Display created at " << platf::to_utf8(vdisplayName);
 
+    // The display usually arrives in its preferred mode, the stream's; Windows restores another
+    // only for a display it has seen before
     if (apply_mode) {
-      // Apply display settings
-      VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), mode.width, mode.height, mode.refresh_mhz);
+      int width = 0;
+      int height = 0;
+      int refresh_mhz = 0;
+      if (!VDISPLAY::getDisplayMode(vdisplayName.c_str(), width, height, refresh_mhz) || !vdisplay_mode::runs(mode, width, height, refresh_mhz)) {
+        VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), mode.width, mode.height, mode.refresh_mhz);
+      }
     }
 
     // Check the ISOLATED DISPLAY configuration setting and rearrange the displays
@@ -608,24 +616,39 @@ namespace proc {
     bool hdr_automatic = config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic;
     bool hdr_differs = hdr_automatic && VDISPLAY::getDisplayHDRByName(displayW.c_str()) != session.enable_hdr;
 
+    // What the display would be for this client now. Windows reads a display's description and
+    // modes only when it arrives, so another screen, or a mode the display didn't arrive with,
+    // needs it to arrive again.
+    luzvda_desc::guid_bytes_t guid_bytes;
+    std::memcpy(guid_bytes.data(), &_launch_session->display_guid, guid_bytes.size());
+    auto desc = luzvda_desc::display(client_display::describe(session.client_screen, want), _vdisplay_client_name, guid_bytes);
+    bool same_screen = luzvda_desc::same_screen(_vdisplay_desc, desc);
+
+    auto replug = [&](const char *why) {
+      BOOST_LOG(info) << "vdisplay: "sv << why << ", re-creating "sv << display_name;
+
+      VDISPLAY::removeVirtualDisplay(_launch_session->display_guid);
+      virtual_display = false;
+      display_name.clear();
+      mode_changed_display.clear();
+
+      return setup_virtual_display(want, session.client_screen, _launch_session->display_guid, true) ? vdisplay_change_e::replugged : vdisplay_change_e::failed;
+    };
+
     auto result = vdisplay_change_e::unchanged;
-    if (!known || !vdisplay_mode::runs(want, width, height, refresh_mhz)) {
+    if (!same_screen) {
+      result = replug("the client streams to another screen");
+    } else if (!known || !vdisplay_mode::runs(want, width, height, refresh_mhz)) {
       BOOST_LOG(info) << "vdisplay: resume asks for "sv << want.width << 'x' << want.height << 'x' << want.refresh_mhz
                       << " mHz, "sv << display_name << " runs "sv << width << 'x' << height << 'x' << refresh_mhz << " mHz"sv;
 
-      VDISPLAY::changeDisplaySettings(displayW.c_str(), want.width, want.height, want.refresh_mhz);
+      if (luzvda_desc::offers(_vdisplay_desc, want)) {
+        VDISPLAY::changeDisplaySettings(displayW.c_str(), want.width, want.height, want.refresh_mhz);
+      }
       if (VDISPLAY::getDisplayMode(displayW.c_str(), width, height, refresh_mhz) && vdisplay_mode::runs(want, width, height, refresh_mhz)) {
         result = vdisplay_change_e::mode_changed;
       } else {
-        // The driver only offers some modes on a display; a new one gets the new size as its own
-        BOOST_LOG(info) << "vdisplay: the driver doesn't offer that mode on "sv << display_name << ", re-creating the display"sv;
-
-        VDISPLAY::removeVirtualDisplay(_launch_session->display_guid);
-        virtual_display = false;
-        display_name.clear();
-        mode_changed_display.clear();
-
-        result = setup_virtual_display(want, _launch_session->display_guid, true) ? vdisplay_change_e::replugged : vdisplay_change_e::failed;
+        result = replug("the display doesn't offer that mode");
       }
     } else if (hdr_differs) {
       result = vdisplay_change_e::mode_changed;
@@ -642,6 +665,7 @@ namespace proc {
       _launch_session->height = want.height;
       _launch_session->fps = session.fps;
       _launch_session->enable_hdr = session.enable_hdr;
+      _launch_session->client_screen = session.client_screen;
     }
 
     auto stats = VDISPLAY::takeModeStats();

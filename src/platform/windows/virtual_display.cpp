@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <iostream>
 #include <vector>
 #include <setupapi.h>
@@ -19,14 +20,13 @@
 #include "src/logging.h"
 #include "virtual_display.h"
 
-using namespace SUDOVDA;
 using namespace std::literals;
 
 namespace VDISPLAY {
 // {dff7fd29-5b75-41d1-9731-b32a17a17104}
 // static const GUID DEFAULT_DISPLAY_GUID = { 0xdff7fd29, 0x5b75, 0x41d1, { 0x97, 0x31, 0xb3, 0x2a, 0x17, 0xa1, 0x71, 0x04 } };
 
-HANDLE SUDOVDA_DRIVER_HANDLE = INVALID_HANDLE_VALUE;
+HANDLE LUZVDA_DRIVER_HANDLE = INVALID_HANDLE_VALUE;
 
 // [fork] Each successful mode or layout change makes the screen blank for a moment; counted so a
 // launch can log how many it took
@@ -433,62 +433,69 @@ bool setDisplayHDRByName(const wchar_t* displayName, bool enableAdvancedColor) {
 }
 
 void closeVDisplayDevice() {
-	if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
+	if (LUZVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 		return;
 	}
 
-	CloseHandle(SUDOVDA_DRIVER_HANDLE);
+	CloseHandle(LUZVDA_DRIVER_HANDLE);
 
-	SUDOVDA_DRIVER_HANDLE = INVALID_HANDLE_VALUE;
+	LUZVDA_DRIVER_HANDLE = INVALID_HANDLE_VALUE;
 }
 
 DRIVER_STATUS openVDisplayDevice() {
+	DWORD error = 0;
 	uint32_t retryInterval = 20;
 	while (true) {
-		SUDOVDA_DRIVER_HANDLE = OpenDevice(&SUVDA_INTERFACE_GUID);
-		if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
-			if (retryInterval > 320) {
-				BOOST_LOG(warning) << "vdisplay: failed to open the SudoVDA driver"sv;
-				return DRIVER_STATUS::FAILED;
-			}
-			retryInterval *= 2;
-			Sleep(retryInterval);
-			continue;
+		LUZVDA_DRIVER_HANDLE = LUZVDA::openDevice(error);
+		if (LUZVDA_DRIVER_HANDLE != INVALID_HANDLE_VALUE) {
+			break;
 		}
-
-		break;
+		if (retryInterval > 320) {
+			BOOST_LOG(warning) << "vdisplay: failed to open the LuzVDA driver, error "sv << error;
+			return DRIVER_STATUS::FAILED;
+		}
+		retryInterval *= 2;
+		Sleep(retryInterval);
 	}
 
-	if (!CheckProtocolCompatible(SUDOVDA_DRIVER_HANDLE)) {
-		BOOST_LOG(warning) << "vdisplay: the SudoVDA driver's protocol version isn't compatible"sv;
+	LUZVDA_VERSION version {};
+	error = LUZVDA::getVersion(LUZVDA_DRIVER_HANDLE, version);
+	if (error || !LUZVDA::isCompatible(version)) {
+		BOOST_LOG(warning) << "vdisplay: the LuzVDA driver speaks protocol "sv << version.major << '.' << version.minor
+			<< " (error "sv << error << "), Apollo needs "sv << LUZVDA_PROTOCOL_MAJOR << '.' << LUZVDA_PROTOCOL_MINOR << " or a later minor"sv;
 		closeVDisplayDevice();
 		return DRIVER_STATUS::VERSION_INCOMPATIBLE;
 	}
+
+	BOOST_LOG(info) << "vdisplay: LuzVDA "sv << version.driver[0] << '.' << version.driver[1] << '.' << version.driver[2] << '.' << version.driver[3]
+		<< ", protocol "sv << version.major << '.' << version.minor;
+
+	// Apollo is the driver's only user, so any display it has was left by an Apollo that stopped
+	// without removing it
+	removeAllVirtualDisplays();
 
 	return DRIVER_STATUS::OK;
 }
 
 bool startPingThread(std::function<void()> failCb) {
-	if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
+	if (LUZVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 		return false;
 	}
 
-	VIRTUAL_DISPLAY_GET_WATCHDOG_OUT watchdogOut;
-	if (GetWatchdogTimeout(SUDOVDA_DRIVER_HANDLE, watchdogOut)) {
-		BOOST_LOG(info) << "vdisplay: watchdog timeout "sv << watchdogOut.Timeout << " s, countdown "sv << watchdogOut.Countdown;
-	} else {
-		BOOST_LOG(warning) << "vdisplay: failed to read the driver's watchdog"sv;
+	LUZVDA_WATCHDOG watchdog {};
+	if (DWORD error = LUZVDA::getWatchdog(LUZVDA_DRIVER_HANDLE, watchdog)) {
+		BOOST_LOG(warning) << "vdisplay: failed to read the driver's watchdog, error "sv << error;
 		return false;
 	}
+	BOOST_LOG(info) << "vdisplay: watchdog timeout "sv << watchdog.timeout_s << " s, countdown "sv << watchdog.countdown_s;
 
-	if (watchdogOut.Timeout) {
-		auto sleepInterval = watchdogOut.Timeout * 1000 / 3;
+	if (watchdog.timeout_s) {
+		auto sleepInterval = watchdog.timeout_s * 1000 / 3;
 		std::thread ping_thread([sleepInterval, failCb = std::move(failCb)]{
 			// [fork] Give up after 4 failures in a row; one success starts the count again
 			uint8_t fail_count = 0;
 			for (;;) {
-				if (!sleepInterval) return;
-				if (PingDriver(SUDOVDA_DRIVER_HANDLE)) {
+				if (LUZVDA::ping(LUZVDA_DRIVER_HANDLE) == 0) {
 					fail_count = 0;
 				} else {
 					fail_count += 1;
@@ -496,7 +503,7 @@ bool startPingThread(std::function<void()> failCb) {
 						failCb();
 						return;
 					}
-				};
+				}
 				Sleep(sleepInterval);
 			}
 		});
@@ -508,7 +515,7 @@ bool startPingThread(std::function<void()> failCb) {
 }
 
 bool setRenderAdapterByName(const std::wstring& adapterName) {
-	if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
+	if (LUZVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 		return false;
 	}
 
@@ -531,7 +538,7 @@ bool setRenderAdapterByName(const std::wstring& adapterName) {
 			continue;
 		}
 
-		if (SetRenderAdapter(SUDOVDA_DRIVER_HANDLE, desc.AdapterLuid)) {
+		if (LUZVDA::setRenderAdapter(LUZVDA_DRIVER_HANDLE, desc.AdapterLuid) == 0) {
 			return true;
 		}
 	}
@@ -543,7 +550,7 @@ bool setRenderAdapterByName(const std::wstring& adapterName) {
 // The encoder runs on the GPU that renders the captured display, so this is also the one that
 // encodes. Integrated GPUs have little or no dedicated memory.
 bool setRenderAdapterAuto() {
-	if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
+	if (LUZVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 		return false;
 	}
 
@@ -576,8 +583,8 @@ bool setRenderAdapterAuto() {
 		return false;
 	}
 
-	if (!SetRenderAdapter(SUDOVDA_DRIVER_HANDLE, best.AdapterLuid)) {
-		BOOST_LOG(warning) << "vdisplay: failed to render the virtual display on "sv << narrow(best.Description);
+	if (DWORD error = LUZVDA::setRenderAdapter(LUZVDA_DRIVER_HANDLE, best.AdapterLuid)) {
+		BOOST_LOG(warning) << "vdisplay: failed to render the virtual display on "sv << narrow(best.Description) << ", error "sv << error;
 		return false;
 	}
 
@@ -593,54 +600,143 @@ bool setRenderAdapter(const std::string& adapterName) {
 	return setRenderAdapterAuto();
 }
 
-std::wstring createVirtualDisplay(
-	const char* s_client_uid,
-	const char* s_client_name,
-	uint32_t width,
-	uint32_t height,
-	uint32_t fps,
-	const GUID& guid
-) {
-	if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
+// [fork] The GDI name of the display at this adapter and target, once Windows has given it a path.
+// Target ids are only unique per adapter; the id alone is the fallback in case the path names
+// another adapter than the driver reported.
+static bool displayNameFor(const LUID& adapter, uint32_t targetId, std::wstring& name) {
+	std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+	std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+	if (!queryActiveConfig(paths, modes)) {
+		return false;
+	}
+
+	const DISPLAYCONFIG_PATH_INFO* found = nullptr;
+	for (const auto& path : paths) {
+		if (path.targetInfo.id == targetId && sameLuid(path.targetInfo.adapterId, adapter)) {
+			found = &path;
+			break;
+		}
+	}
+	if (!found) {
+		for (const auto& path : paths) {
+			if (path.targetInfo.id == targetId) {
+				found = &path;
+				break;
+			}
+		}
+	}
+
+	return found && sourceNameOf(*found, name);
+}
+
+static bool listed(const GUID& guid) {
+	LUZVDA_LIST list;
+	if (LUZVDA::listDisplays(LUZVDA_DRIVER_HANDLE, list)) {
+		return false;
+	}
+	auto want = LUZVDA::toProtocol(guid);
+	for (uint32_t i = 0; i < list.count; ++i) {
+		if (std::memcmp(list.displays[i].monitor_guid.bytes, want.bytes, sizeof(want.bytes)) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+std::wstring createVirtualDisplay(const LUZVDA_DISPLAY_DESC& desc) {
+	if (LUZVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 		return std::wstring();
 	}
 
 	auto start = std::chrono::steady_clock::now();
+	GUID guid;
+	std::memcpy(&guid, desc.monitor_guid.bytes, sizeof(guid));
 
-	VIRTUAL_DISPLAY_ADD_OUT output;
-	if (!AddVirtualDisplay(SUDOVDA_DRIVER_HANDLE, width, height, fps, guid, s_client_name, s_client_uid, output)) {
-		BOOST_LOG(warning) << "vdisplay: failed to add a virtual display"sv;
+	LUZVDA_ADD_OUT output {};
+	DWORD error = LUZVDA::addDisplay(LUZVDA_DRIVER_HANDLE, desc, output);
+	if (error && listed(guid)) {
+		// Connected with another description, e.g. from the client's other screen: Windows reads the
+		// description only when a display arrives, so it has to arrive again
+		BOOST_LOG(info) << "vdisplay: the display is already there with another description, re-adding it"sv;
+		LUZVDA::removeDisplay(LUZVDA_DRIVER_HANDLE, desc.monitor_guid);
+		error = LUZVDA::addDisplay(LUZVDA_DRIVER_HANDLE, desc, output);
+	}
+	if (error) {
+		BOOST_LOG(warning) << "vdisplay: failed to add a virtual display, error "sv << error;
 		return std::wstring();
 	}
 
-	uint32_t retryInterval = 20;
-	wchar_t deviceName[CCHDEVICENAME]{};
-	while (!GetAddedDisplayName(output, deviceName)) {
-		Sleep(retryInterval);
-		if (retryInterval > 320) {
+	// Windows gives the display a path shortly after it arrives
+	auto adapter = LUZVDA::fromProtocol(output.adapter);
+	std::wstring name;
+	while (!displayNameFor(adapter, output.target_id, name)) {
+		if (std::chrono::steady_clock::now() - start > 3s) {
 			BOOST_LOG(warning) << "vdisplay: no name for the new virtual display in time"sv;
 			return std::wstring();
 		}
-		retryInterval *= 2;
+		Sleep(10);
 	}
 
+	const auto& mode = desc.modes[desc.preferred_mode < desc.mode_count ? desc.preferred_mode : 0];
 	auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-	BOOST_LOG(info) << "vdisplay: added "sv << narrow(deviceName) << " ("sv << width << 'x' << height << 'x' << fps
-		<< " mHz) in "sv << ms << " ms"sv;
+	BOOST_LOG(info) << "vdisplay: added "sv << narrow(name.c_str()) << " in "sv << ms << " ms: "sv
+		<< mode.width << 'x' << mode.height << 'x' << mode.refresh_mhz << " mHz, one of "sv << desc.mode_count << " modes, "sv
+		<< desc.width_mm << 'x' << desc.height_mm << " mm, "sv << (desc.primaries[6] ? "own primaries, "sv : "sRGB, "sv)
+		<< ((desc.flags & LUZVDA_DISPLAY_HDR) ? "HDR"sv : "SDR"sv);
+	if (desc.flags & LUZVDA_DISPLAY_HDR) {
+		BOOST_LOG(info) << "vdisplay: HDR peak "sv << desc.max_luminance << " nits, full screen "sv << desc.max_full_frame_luminance
+			<< " nits, black "sv << desc.min_luminance / 10000.0 << " nits"sv;
+	}
 
-	return std::wstring(deviceName);
+	return name;
+}
+
+bool updateVirtualDisplayModes(const LUZVDA_UPDATE_MODES& update) {
+	if (LUZVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
+		return false;
+	}
+
+	if (DWORD error = LUZVDA::updateModes(LUZVDA_DRIVER_HANDLE, update)) {
+		BOOST_LOG(warning) << "vdisplay: failed to update the display's modes, error "sv << error;
+		return false;
+	}
+	return true;
 }
 
 bool removeVirtualDisplay(const GUID& guid) {
-	if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
+	if (LUZVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 		return false;
 	}
 
-	if (RemoveVirtualDisplay(SUDOVDA_DRIVER_HANDLE, guid)) {
-		BOOST_LOG(debug) << "vdisplay: virtual display removed"sv;
-		return true;
-	} else {
+	if (DWORD error = LUZVDA::removeDisplay(LUZVDA_DRIVER_HANDLE, LUZVDA::toProtocol(guid))) {
+		BOOST_LOG(debug) << "vdisplay: failed to remove the virtual display, error "sv << error;
 		return false;
 	}
+
+	BOOST_LOG(debug) << "vdisplay: virtual display removed"sv;
+	return true;
+}
+
+int removeAllVirtualDisplays() {
+	if (LUZVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
+		return 0;
+	}
+
+	LUZVDA_LIST list;
+	if (DWORD error = LUZVDA::listDisplays(LUZVDA_DRIVER_HANDLE, list)) {
+		BOOST_LOG(warning) << "vdisplay: failed to list the driver's displays, error "sv << error;
+		return 0;
+	}
+
+	int removed = 0;
+	for (uint32_t i = 0; i < list.count; ++i) {
+		if (LUZVDA::removeDisplay(LUZVDA_DRIVER_HANDLE, list.displays[i].monitor_guid) == 0) {
+			removed++;
+		}
+	}
+	if (removed) {
+		BOOST_LOG(info) << "vdisplay: removed "sv << removed << " virtual displays left from before"sv;
+	}
+	return removed;
 }
 }
