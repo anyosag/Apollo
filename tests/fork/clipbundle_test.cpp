@@ -286,13 +286,45 @@ static void test_dib() {
   CHECK(dib_to_bmp("tiny").empty());
 }
 
+static void test_picture_text() {
+  // HTML that shows no text
+  CHECK(html_visible_text_empty(""));
+  CHECK(html_visible_text_empty("<html><body><!--StartFragment--><img src=\"https://example.com/cat.png\" alt=\"A cat\"/><!--EndFragment--></body></html>"));
+  CHECK(html_visible_text_empty("<html><head><title>Cat</title><style>p{color:red}</style><meta charset=\"utf-8\"></head><body>\r\n &nbsp;<img src=x>&#160;</body></html>"));
+  CHECK(html_visible_text_empty("<script>var a = 'text';</script><IMG SRC=x>\xC2\xA0"));
+  CHECK(html_visible_text_empty("<img src=x"));  // cut off inside a tag
+  // HTML with text
+  CHECK(!html_visible_text_empty("<html><body><!--StartFragment--><table><tr><td>1</td></tr></table><!--EndFragment--></body></html>"));
+  CHECK(!html_visible_text_empty("<img src=x> caption"));
+  CHECK(!html_visible_text_empty("<header>Shown</header>"));  // not <head>
+  CHECK(!html_visible_text_empty("&amp;"));
+  CHECK(!html_visible_text_empty("<p>caf\xC3\xA9</p>"));
+
+  // Plain text that's only a picture's address, or nothing
+  CHECK(picture_only_text(""));
+  CHECK(picture_only_text(" \n\t"));
+  CHECK(picture_only_text("https://cdn.example.com/a.png?size=large"));
+  CHECK(picture_only_text("  HTTP://EXAMPLE.COM/A.PNG\n"));
+  CHECK(picture_only_text("data:image/png;base64,iVBORw0KGgo="));
+  CHECK(!picture_only_text("hello"));
+  CHECK(!picture_only_text("see https://example.com/a.png"));
+  CHECK(!picture_only_text("1\t2\n3\t4\n"));
+}
+
 static void test_rules() {
+  const std::string img_html = "<html><body><!--StartFragment--><img src=\"https://example.com/a.png\"/><!--EndFragment--></body></html>";
+  const std::string table_html = "<html><body><!--StartFragment--><table><tr><td>1</td><td>2</td></tr></table><!--EndFragment--></body></html>";
+
   // R3 with the format orders apps really use
-  CHECK(!include_image({kind::other, kind::text, kind::text, kind::image}));  // Excel range: text before its bitmap
-  CHECK(include_image({kind::other, kind::image, kind::text}));  // Word picture: the picture comes first
-  CHECK(include_image({kind::image}));  // Snipping Tool / screenshot
-  CHECK(include_image({kind::other, kind::image, kind::text}));  // browser "Copy Image" (PNG, then HTML)
-  CHECK(include_image({}));
+  CHECK(!include_image({kind::other, kind::text, kind::text, kind::image}, "1\t2\n", table_html));  // Excel range: text before its bitmap
+  CHECK(!include_image({kind::text, kind::text, kind::image}, "Some words", "<p>Some words</p>"));  // Word text with a rendered bitmap
+  CHECK(!include_image({kind::text, kind::image}, "Some words", ""));  // text and a bitmap, no HTML
+  CHECK(include_image({kind::other, kind::image, kind::text}, "caption", "<p>caption</p>"));  // Word picture: the picture comes first
+  CHECK(include_image({kind::image}, "", ""));  // Snipping Tool / screenshot
+  CHECK(include_image({kind::other, kind::text, kind::image}, "", img_html));  // Chromium "Copy image": HTML, then the bitmap
+  CHECK(include_image({kind::text, kind::text, kind::image}, "https://example.com/a.png", img_html));  // Firefox: HTML and the URL as text
+  CHECK(include_image({kind::text, kind::image}, "", ""));  // an empty text format before the picture
+  CHECK(include_image({}, "", ""));
 
   // Ordering: Office first, then RTF/HTML (source order), images, then plain text
   std::vector<item> items = {{"text/plain", "t"}, {"image/png", "p"}, {"text/html", "<b>h</b>"}, {"text/rtf", "{\\rtf1}"}, {"ms/gvml", "g"}};
@@ -304,9 +336,22 @@ static void test_rules() {
   CHECK(items[4].type == "text/plain");
 
   // A picture copy puts the image first
-  items = {{"text/plain", "t"}, {"text/html", "<img>"}, {"image/png", "p"}};
+  items = {{"text/plain", "t"}, {"text/html", "<b>h</b>"}, {"image/png", "p"}};
   prepare_for_send(items, true);
-  CHECK(items[0].type == "image/png" && items[2].type == "text/plain");
+  CHECK(items.size() == 3 && items[0].type == "image/png" && items[2].type == "text/plain");
+
+  // R6: ...and drops HTML that only points at the picture
+  items = {{"text/plain", "https://example.com/a.png"}, {"text/html", img_html}, {"image/png", "p"}};
+  prepare_for_send(items, true);
+  CHECK(items.size() == 2 && items[0].type == "image/png" && items[1].type == "text/plain");
+  // ...but keeps it when the image didn't make it
+  items = {{"text/html", img_html}};
+  prepare_for_send(items, true);
+  CHECK(items.size() == 1);
+  // ...and when it isn't a picture copy
+  items = {{"text/html", img_html}, {"image/png", "p"}};
+  prepare_for_send(items, false);
+  CHECK(items.size() == 2);
 
   // R4: Word's HTML with local images is dropped when RTF is there...
   items = {{"text/html", "<img src=\"file:///C:/clip_image001.png\">"}, {"text/rtf", "{\\rtf1\\pict}"}, {"text/plain", "t"}};
@@ -347,6 +392,7 @@ int main() {
   test_html_helpers();
   test_trimming();
   test_dib();
+  test_picture_text();
   test_rules();
   test_limit();
 
