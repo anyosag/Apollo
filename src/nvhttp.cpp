@@ -18,9 +18,11 @@
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/xml_parser.hpp>
+#include <openssl/crypto.h>
 #include <Simple-Web-Server/server_http.hpp>
 
 // local includes
+#include "client_args.h"
 #include "config.h"
 #include "display_device.h"
 #include "atomic_file.h"
@@ -66,6 +68,11 @@ namespace nvhttp {
   static std::string otp_passphrase;
   static std::string otp_device_name;
   static std::chrono::time_point<std::chrono::steady_clock> otp_creation_time;
+  /// Wrong OTP attempts since it was requested; it's discarded after max_otp_failures
+  static int otp_failures = 0;
+  constexpr int max_otp_failures = 3;
+  /// A pairing session (one waiting for its PIN, say) is dropped after this long
+  constexpr auto pair_session_timeout = OTP_EXPIRE_DURATION;
 
   class SunshineHTTPSServer: public SimpleWeb::ServerBase<SunshineHTTPS> {
   public:
@@ -150,6 +157,17 @@ namespace nvhttp {
 
   // uniqueID, session
   std::unordered_map<std::string, pair_session_t> map_id_sess;
+
+  /**
+   * @brief Drops pairing sessions older than pair_session_timeout, so abandoned ones don't pile up or
+   * keep a PIN from being entered.
+   */
+  void expire_pair_sessions() {
+    auto now = std::chrono::steady_clock::now();
+    std::erase_if(map_id_sess, [now](const auto &entry) {
+      return now - entry.second.created > pair_session_timeout;
+    });
+  }
   client_t client_root;
   std::atomic<uint32_t> session_id_counter;
 
@@ -452,12 +470,18 @@ namespace nvhttp {
       launch_session->fps = 60000; // 60fps * 1000 denominator
     }
 
-    launch_session->device_name = named_cert_p->name.empty() ? "ApolloDisplay"s : named_cert_p->name;
+    // The name and surroundParams come from the client and reach commands' environment and the SDP
+    auto device_name = client_args::sanitize_device_name(named_cert_p->name);
+    launch_session->device_name = device_name.empty() ? "ApolloDisplay"s : device_name;
     launch_session->unique_id = named_cert_p->uuid;
     launch_session->perm = named_cert_p->perm;
     launch_session->enable_sops = util::from_view(get_arg(args, "sops", "0"));
     launch_session->surround_info = util::from_view(get_arg(args, "surroundAudioInfo", "196610"));
-    launch_session->surround_params = (get_arg(args, "surroundParams", ""));
+    launch_session->surround_params = get_arg(args, "surroundParams", "");
+    if (!client_args::valid_surround_params(launch_session->surround_params)) {
+      BOOST_LOG(warning) << "Ignoring malformed surroundParams from ["sv << launch_session->device_name << ']';
+      launch_session->surround_params.clear();
+    }
     launch_session->gcmap = util::from_view(get_arg(args, "gcmap", "0"));
     launch_session->enable_hdr = util::from_view(get_arg(args, "hdrMode", "0"));
     launch_session->virtual_display = util::from_view(get_arg(args, "virtualDisplay", "0")) || named_cert_p->always_use_virtual_display;
@@ -613,17 +637,14 @@ namespace nvhttp {
     auto hash = crypto::hash(data);
 
     // if hash not correct, probably MITM
-    bool same_hash = hash.size() == sess.clienthash.size() && std::equal(hash.begin(), hash.end(), sess.clienthash.begin());
+    bool same_hash = hash.size() == sess.clienthash.size() && CRYPTO_memcmp(hash.data(), sess.clienthash.data(), hash.size()) == 0;
     auto verify = crypto::verify256(crypto::x509(client.cert), secret, sign);
     if (same_hash && verify) {
       tree.put("root.paired", 1);
 
       auto named_cert_p = std::make_shared<crypto::named_cert_t>();
-      named_cert_p->name = client.name;
-      for (char& c : named_cert_p->name) {
-        if (c == '(') c = '[';
-        else if (c == ')') c = ']';
-      }
+      // Every pairing path's name ends up here: the client's, the PIN page's or the OTP's
+      named_cert_p->name = client_args::sanitize_device_name(client.name);
       named_cert_p->cert = std::move(client.cert);
       named_cert_p->uuid = uuid_util::uuid_t::generate().string();
       // If the device is the first one paired with the server, assign full permission.
@@ -735,6 +756,8 @@ namespace nvhttp {
     args_t::const_iterator it;
     if (it = args.find("phrase"); it != std::end(args)) {
       if (it->second == "getservercert"sv) {
+        expire_pair_sessions();
+
         pair_session_t sess;
 
         auto deviceName { get_arg(args, "devicename") };
@@ -762,8 +785,10 @@ namespace nvhttp {
             tree.put("root.<xmlattr>.status_message", "OTP auth not available.");
           } else {
             auto hash = util::hex(crypto::hash(one_time_pin + ptr->second.async_insert_pin.salt + otp_passphrase), true);
+            auto expected = hash.to_string_view();
+            const auto &given = it->second;
 
-            if (hash.to_string_view() == it->second) {
+            if (expected.size() == given.size() && CRYPTO_memcmp(expected.data(), given.data(), expected.size()) == 0) {
 
               if (!otp_device_name.empty()) {
                 ptr->second.client.name = std::move(otp_device_name);
@@ -775,6 +800,14 @@ namespace nvhttp {
               otp_passphrase.clear();
               otp_device_name.clear();
               return;
+            }
+
+            // The PIN is only 4 digits, so a few wrong guesses use it up
+            if (++otp_failures >= max_otp_failures) {
+              BOOST_LOG(warning) << "Discarding the OTP after "sv << otp_failures << " wrong attempts; request a new one"sv;
+              one_time_pin.clear();
+              otp_passphrase.clear();
+              otp_device_name.clear();
             }
           }
 
@@ -831,7 +864,24 @@ namespace nvhttp {
 
   bool pin(std::string pin, std::string name) {
     pt::ptree tree;
-    if (map_id_sess.empty()) {
+    expire_pair_sessions();
+
+    // The PIN goes to the one device waiting for it. With several waiting, there's no telling which
+    // one the PIN came from, and applying it to another (perhaps an attacker's) would be wrong.
+    pair_session_t *waiting = nullptr;
+    int waiting_count = 0;
+    for (auto &[id, sess] : map_id_sess) {
+      auto &response = sess.async_insert_pin.response;
+      if ((response.has_left() && response.left()) || (response.has_right() && response.right())) {
+        waiting = &sess;
+        waiting_count++;
+      }
+    }
+    if (waiting_count == 0) {
+      return false;
+    }
+    if (waiting_count > 1) {
+      BOOST_LOG(warning) << waiting_count << " devices are waiting for a PIN; pair them one at a time"sv;
       return false;
     }
 
@@ -854,7 +904,7 @@ namespace nvhttp {
       return false;
     }
 
-    auto &sess = std::begin(map_id_sess)->second;
+    auto &sess = *waiting;
     getservercert(sess, tree, pin);
 
     if (!name.empty()) {
@@ -1176,10 +1226,14 @@ namespace nvhttp {
     BOOST_LOG(verbose) << "Launching app [" << appid_str << "] with UUID [" << appuuid_str << "]";
     // BOOST_LOG(verbose) << "QS: " << request->query_string;
 
+    // The same test as the "terminate" handling below, which ends the running app
+    bool is_terminate = (config::input.enable_input_only_mode && appid == proc::terminate_app_id) || appuuid_str == TERMINATE_APP_UUID;
+
     // If we have already launched an app, we should allow clients with view permission to join the input only or current app's session.
+    // Ending the app always takes the launch permission.
     if (
       current_appid > 0
-      && (appuuid_str != TERMINATE_APP_UUID || appid != proc::terminate_app_id)
+      && !is_terminate
       && (is_input_only || appid == current_appid || (!appuuid_str.empty() && appuuid_str == current_app_uuid))
     ) {
       perm = PERM::_allow_view;
@@ -1206,13 +1260,17 @@ namespace nvhttp {
 
       return;
     }
+    if (!client_args::valid_rikey(get_arg(args, "rikey"))) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "rikey must be 16 bytes of hex");
+
+      return;
+    }
 
     if (!is_input_only) {
       // Special handling for the "terminate" app
-      if (
-        (config::input.enable_input_only_mode && appid == proc::terminate_app_id)
-        || appuuid_str == TERMINATE_APP_UUID
-      ) {
+      if (is_terminate) {
         proc::proc.terminate();
 
         tree.put("root.resume", 0);
@@ -1240,6 +1298,7 @@ namespace nvhttp {
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     auto launch_session = make_launch_session(host_audio, is_input_only, args, named_cert_p);
+    launch_session->client_address = net::addr_to_normalized_string(request->remote_endpoint().address());
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
     if (!launch_session->rtsp_cipher && encryption_mode == config::ENCRYPTION_MODE_MANDATORY) {
@@ -1389,6 +1448,13 @@ namespace nvhttp {
 
       return;
     }
+    if (!client_args::valid_rikey(get_arg(args, "rikey"))) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 400);
+      tree.put("root.<xmlattr>.status_message", "rikey must be 16 bytes of hex");
+
+      return;
+    }
 
     // Newer Moonlight clients send localAudioPlayMode on /resume too,
     // so we should use it if it's present in the args and there are
@@ -1398,6 +1464,7 @@ namespace nvhttp {
       host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     }
     auto launch_session = make_launch_session(host_audio, false, args, named_cert_p);
+    launch_session->client_address = net::addr_to_normalized_string(request->remote_endpoint().address());
 
     if (!proc::proc.allow_client_commands || !named_cert_p->allow_client_commands) {
       launch_session->client_do_cmds.clear();
@@ -1764,6 +1831,9 @@ namespace nvhttp {
     http_server.config.reuse_address = true;
     http_server.config.address = net::af_to_any_address_string(address_family);
     http_server.config.port = port_http;
+    // Unauthenticated, and its requests (/serverinfo, /pair) are a query string; without a limit,
+    // anyone who can connect could make the host buffer a body of any size
+    http_server.config.max_request_streambuf_size = 1 << 20;
 
     auto accept_and_run = [&](auto *http_server) {
       try {
@@ -1803,6 +1873,7 @@ namespace nvhttp {
     otp_passphrase = passphrase;
     otp_device_name = deviceName;
     otp_creation_time = std::chrono::steady_clock::now();
+    otp_failures = 0;
 
     return one_time_pin;
   }

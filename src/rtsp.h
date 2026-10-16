@@ -36,6 +36,7 @@ namespace rtsp_stream {
 
     std::string device_name;
     std::string unique_id;
+    std::string client_address;  ///< Normalized address of the client that launched; only it may connect to RTSP
     crypto::PERM perm;
 
     bool input_only;
