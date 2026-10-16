@@ -617,7 +617,8 @@ static bool displayNameFor(const LUID& adapter, uint32_t targetId, std::wstring&
 	return found && sourceNameOf(*found, name);
 }
 
-static bool listed(const GUID& guid) {
+// [fork] Where the driver has the display with this GUID
+static bool findListed(const GUID& guid, LUID& adapter, uint32_t& targetId) {
 	LUZVDA_LIST list;
 	if (LUZVDA::listDisplays(LUZVDA_DRIVER_HANDLE, list)) {
 		return false;
@@ -625,6 +626,28 @@ static bool listed(const GUID& guid) {
 	auto want = LUZVDA::toProtocol(guid);
 	for (uint32_t i = 0; i < list.count; ++i) {
 		if (std::memcmp(list.displays[i].monitor_guid.bytes, want.bytes, sizeof(want.bytes)) == 0) {
+			adapter = LUZVDA::fromProtocol(list.displays[i].adapter);
+			targetId = list.displays[i].target_id;
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool listed(const GUID& guid) {
+	LUID adapter;
+	uint32_t targetId;
+	return findListed(guid, adapter, targetId);
+}
+
+static bool hasPath(const LUID& adapter, uint32_t targetId) {
+	std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+	std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+	if (!queryActiveConfig(paths, modes)) {
+		return false;
+	}
+	for (const auto& path : paths) {
+		if (path.targetInfo.id == targetId && sameLuid(path.targetInfo.adapterId, adapter)) {
 			return true;
 		}
 	}
@@ -646,7 +669,7 @@ std::wstring createVirtualDisplay(const LUZVDA_DISPLAY_DESC& desc) {
 		// Connected with another description, e.g. from the client's other screen: Windows reads the
 		// description only when a display arrives, so it has to arrive again
 		BOOST_LOG(info) << "vdisplay: the display is already there with another description, re-adding it"sv;
-		LUZVDA::removeDisplay(LUZVDA_DRIVER_HANDLE, desc.monitor_guid);
+		removeVirtualDisplay(guid);
 		error = LUZVDA::addDisplay(LUZVDA_DRIVER_HANDLE, desc, output);
 	}
 	if (error) {
@@ -696,9 +719,27 @@ bool removeVirtualDisplay(const GUID& guid) {
 		return false;
 	}
 
+	LUID adapter {};
+	uint32_t targetId = 0;
+	bool found = findListed(guid, adapter, targetId);
+
 	if (DWORD error = LUZVDA::removeDisplay(LUZVDA_DRIVER_HANDLE, LUZVDA::toProtocol(guid))) {
 		BOOST_LOG(debug) << "vdisplay: failed to remove the virtual display, error "sv << error;
 		return false;
+	}
+
+	// Windows drops the display's path a moment after the driver does. A display added again with
+	// the same GUID gets the same target, so until then the old path passes for the new display's:
+	// round 2's re-created displays were "added in 0 ms", before display_device could see them.
+	if (found) {
+		auto start = std::chrono::steady_clock::now();
+		while (hasPath(adapter, targetId)) {
+			if (std::chrono::steady_clock::now() - start > 2s) {
+				BOOST_LOG(warning) << "vdisplay: Windows still shows the removed virtual display after 2 s"sv;
+				break;
+			}
+			Sleep(10);
+		}
 	}
 
 	BOOST_LOG(debug) << "vdisplay: virtual display removed"sv;

@@ -560,6 +560,10 @@ namespace proc {
     // So we always set output_name to the newly created virtual display as a workaround for
     // empty name when probing graphics cards.
     config::video.output_name = display_device::map_display_name(this->display_name);
+    if (config::video.output_name.empty()) {
+      // display_device then configures whichever display is primary
+      BOOST_LOG(warning) << "vdisplay: display_device doesn't list "sv << this->display_name << " yet"sv;
+    }
     return true;
   }
 
