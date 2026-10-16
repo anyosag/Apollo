@@ -16,6 +16,7 @@
 #include <dxgi1_6.h>
 
 #include "display_layout.h"
+#include "src/fork/vdisplay_mode.h"
 #include "misc.h"
 #include "src/logging.h"
 #include "virtual_display.h"
@@ -201,6 +202,10 @@ LONG changeDisplaySettings2(const wchar_t* deviceName, int width, int height, in
 		sourceMode->height = height;
 		path.targetInfo.refreshRate = {(UINT32)refresh_rate, 1000};
 
+		// [fork] Without its target mode, Windows has to pick the signal timing for the new size and
+		// rate, as libdisplaydevice does; kept, the old timing could stay with the desktop scaled into it
+		path.targetInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+
 		LONG status = applyConfig(pathArray, modeArray);
 		if (status != ERROR_SUCCESS) {
 			BOOST_LOG(warning) << "vdisplay: failed to apply display settings ("sv << status << ')';
@@ -216,6 +221,17 @@ LONG changeDisplaySettings2(const wchar_t* deviceName, int width, int height, in
 }
 
 LONG changeDisplaySettings(const wchar_t* deviceName, int width, int height, int refresh_rate) {
+	// [fork] One mode change when the exact one takes; each change blanks the screen
+	if (changeDisplaySettings2(deviceName, width, height, refresh_rate) == ERROR_SUCCESS) {
+		int nowWidth = 0;
+		int nowHeight = 0;
+		int nowRefresh = 0;
+		if (getDisplayMode(deviceName, nowWidth, nowHeight, nowRefresh) && vdisplay_mode::runs({(uint32_t) width, (uint32_t) height, (uint32_t) refresh_rate}, nowWidth, nowHeight, nowRefresh)) {
+			return ERROR_SUCCESS;
+		}
+		BOOST_LOG(debug) << "vdisplay: "sv << narrow(deviceName) << " runs "sv << nowWidth << 'x' << nowHeight << 'x' << nowRefresh << " mHz after the exact change, trying the baseline mode"sv;
+	}
+
 	DEVMODEW devMode = {};
 	devMode.dmSize = sizeof(devMode);
 

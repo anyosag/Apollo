@@ -631,7 +631,19 @@ namespace proc {
       display_name.clear();
       mode_changed_display.clear();
 
-      return setup_virtual_display(want, session.client_screen, _launch_session->display_guid, true) ? vdisplay_change_e::replugged : vdisplay_change_e::failed;
+      if (!setup_virtual_display(want, session.client_screen, _launch_session->display_guid, true)) {
+        return vdisplay_change_e::failed;
+      }
+
+      // A new display brings Windows' own arrangement back, the PC's monitors included, so the
+      // display configuration a launch applies (e.g. this display only) is applied again
+      _launch_session->width = want.width;
+      _launch_session->height = want.height;
+      _launch_session->fps = session.fps;
+      _launch_session->enable_hdr = session.enable_hdr;
+      display_device::configure_display(config::video, *_launch_session);
+      display_device::reset_persistence();
+      return vdisplay_change_e::replugged;
     };
 
     auto result = vdisplay_change_e::unchanged;
@@ -647,23 +659,33 @@ namespace proc {
         BOOST_LOG(info) << "vdisplay: gave "sv << display_name << ' ' << desc.mode_count << " modes for the new one"sv;
         _vdisplay_desc = desc;
       }
+      // Windows may take a moment to offer modes the display just got, so the change is tried again
+      bool took = false;
       if (luzvda_desc::offers(_vdisplay_desc, want)) {
-        VDISPLAY::changeDisplaySettings(displayW.c_str(), want.width, want.height, want.refresh_mhz);
+        for (auto wait : {0ms, 150ms, 300ms, 600ms}) {
+          std::this_thread::sleep_for(wait);
+          VDISPLAY::changeDisplaySettings(displayW.c_str(), want.width, want.height, want.refresh_mhz);
+          took = VDISPLAY::getDisplayMode(displayW.c_str(), width, height, refresh_mhz) && vdisplay_mode::runs(want, width, height, refresh_mhz);
+          if (took) {
+            break;
+          }
+          BOOST_LOG(info) << "vdisplay: "sv << display_name << " runs "sv << width << 'x' << height << 'x' << refresh_mhz << " mHz after the change"sv;
+        }
       }
-      if (VDISPLAY::getDisplayMode(displayW.c_str(), width, height, refresh_mhz) && vdisplay_mode::runs(want, width, height, refresh_mhz)) {
-        result = vdisplay_change_e::mode_changed;
-      } else {
-        result = replug("the display didn't take that mode");
-      }
+      result = took ? vdisplay_change_e::mode_changed : replug("the display didn't take that mode");
     } else if (hdr_differs) {
       result = vdisplay_change_e::mode_changed;
     }
 
     if (result == vdisplay_change_e::mode_changed || result == vdisplay_change_e::replugged) {
-      if (wait_for_display_settings()) {
-        apply_virtual_display_hdr(display_name, session.enable_hdr, false);
-      } else {
-        BOOST_LOG(warning) << "vdisplay: Windows didn't accept display changes in time, HDR left as it is"sv;
+      // A display keeps its HDR state through a mode change (LuzVDA's first test and the stream
+      // test's resumes), so HDR is set again only when it should change or the display is new
+      if (result == vdisplay_change_e::replugged || hdr_differs) {
+        if (wait_for_display_settings()) {
+          apply_virtual_display_hdr(display_name, session.enable_hdr, false);
+        } else {
+          BOOST_LOG(warning) << "vdisplay: Windows didn't accept display changes in time, HDR left as it is"sv;
+        }
       }
 
       _launch_session->width = want.width;
