@@ -55,7 +55,8 @@ extern "C" {
 /* In: LUZVDA_GUID. STATUS_NOT_FOUND if no display has it */
 #define IOCTL_LUZVDA_REMOVE_DISPLAY LUZVDA_CTL_CODE(0x811, LUZVDA_ACCESS_READ_WRITE)
 /* In: LUZVDA_UPDATE_MODES. Replaces a display's target modes (IddCxMonitorUpdateModes2). Windows
- * offers the modes in both this list and the list the display had when it was added */
+ * then takes a mode from this list even if the display didn't have it when it was added (seen on
+ * Windows 11 build 26200) */
 #define IOCTL_LUZVDA_UPDATE_MODES LUZVDA_CTL_CODE(0x812, LUZVDA_ACCESS_READ_WRITE)
 /* In: LUZVDA_LUID. The GPU that renders every display. STATUS_NOT_FOUND if no GPU has that LUID */
 #define IOCTL_LUZVDA_SET_RENDER_ADAPTER LUZVDA_CTL_CODE(0x813, LUZVDA_ACCESS_READ_WRITE)

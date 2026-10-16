@@ -63,9 +63,9 @@ jobs:
       - name: Add LuzVDA driver
         shell: pwsh
         env:
-          LUZVDA_RELEASE: signed-0.0.0.7
-          LUZVDA_ZIP: LuzVDA-0.0.0.7.zip
-          LUZVDA_ZIP_SHA256: 42a928ac906f9697383b2d970f771ad141396189399b6ba9d0a96ba097b75844
+          LUZVDA_RELEASE: signed-0.0.0.9
+          LUZVDA_ZIP: LuzVDA-0.0.0.9.zip
+          LUZVDA_ZIP_SHA256: 2aa6d98c44d5dc5615b668cc7a5cb2db939f8e13c3fcd098919dd0319409893a
         run: |
           $ErrorActionPreference = 'Stop'
           $zip = Join-Path $env:RUNNER_TEMP $env:LUZVDA_ZIP

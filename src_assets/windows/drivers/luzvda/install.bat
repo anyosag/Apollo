@@ -28,9 +28,6 @@ echo Trusting the certificate LuzVDA is signed with...
 %CERTUTIL% -addstore -f Root "luzvda.cer"
 %CERTUTIL% -addstore -f TrustedPublisher "luzvda.cer"
 
-rem Display names of up to 63 characters rather than 13; checked on Windows 11 build 26200
-reg add HKLM\SOFTWARE\LuzVDA /v edidSplitName /t REG_DWORD /d 1 /f >nul
-
 echo ================
 echo Installing LuzVDA...
 "%CTL%" install LuzVDA.inf
