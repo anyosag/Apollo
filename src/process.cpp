@@ -616,9 +616,8 @@ namespace proc {
     bool hdr_automatic = config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic;
     bool hdr_differs = hdr_automatic && VDISPLAY::getDisplayHDRByName(displayW.c_str()) != session.enable_hdr;
 
-    // What the display would be for this client now. Windows reads a display's description and
-    // modes only when it arrives, so another screen, or a mode the display didn't arrive with,
-    // needs it to arrive again.
+    // What the display would be for this client now. Windows reads a display's description only
+    // when it arrives, so another screen needs it to arrive again; another mode doesn't.
     luzvda_desc::guid_bytes_t guid_bytes;
     std::memcpy(guid_bytes.data(), &_launch_session->display_guid, guid_bytes.size());
     auto desc = luzvda_desc::display(client_display::describe(session.client_screen, want), _vdisplay_client_name, guid_bytes);
@@ -642,13 +641,19 @@ namespace proc {
       BOOST_LOG(info) << "vdisplay: resume asks for "sv << want.width << 'x' << want.height << 'x' << want.refresh_mhz
                       << " mHz, "sv << display_name << " runs "sv << width << 'x' << height << 'x' << refresh_mhz << " mHz"sv;
 
+      // A display takes modes it didn't arrive with once the driver offers them (seen on Windows 11
+      // build 26200), so a new one doesn't need the display to arrive again
+      if (!luzvda_desc::offers(_vdisplay_desc, want) && VDISPLAY::updateVirtualDisplayModes(luzvda_desc::update(desc))) {
+        BOOST_LOG(info) << "vdisplay: gave "sv << display_name << ' ' << desc.mode_count << " modes for the new one"sv;
+        _vdisplay_desc = desc;
+      }
       if (luzvda_desc::offers(_vdisplay_desc, want)) {
         VDISPLAY::changeDisplaySettings(displayW.c_str(), want.width, want.height, want.refresh_mhz);
       }
       if (VDISPLAY::getDisplayMode(displayW.c_str(), width, height, refresh_mhz) && vdisplay_mode::runs(want, width, height, refresh_mhz)) {
         result = vdisplay_change_e::mode_changed;
       } else {
-        result = replug("the display doesn't offer that mode");
+        result = replug("the display didn't take that mode");
       }
     } else if (hdr_differs) {
       result = vdisplay_change_e::mode_changed;

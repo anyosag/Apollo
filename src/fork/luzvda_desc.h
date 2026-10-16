@@ -69,6 +69,17 @@ namespace luzvda_desc {
     return out;
   }
 
+  /// The modes of a display as it would be added now, for the same display that is already there
+  inline LUZVDA_UPDATE_MODES update(const LUZVDA_DISPLAY_DESC &d) {
+    LUZVDA_UPDATE_MODES out {};
+    out.struct_size = sizeof(out);
+    out.monitor_guid = d.monitor_guid;
+    out.mode_count = std::min<uint32_t>(d.mode_count, LUZVDA_MAX_MODES);
+    out.preferred_mode = d.preferred_mode < out.mode_count ? d.preferred_mode : 0;
+    std::copy(d.modes, d.modes + out.mode_count, out.modes);
+    return out;
+  }
+
   /**
    * @brief Whether two displays are the same screen to Windows: everything that goes into the
    * EDID. Displays that differ only in modes can keep their monitor; any other change needs a new

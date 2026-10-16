@@ -92,6 +92,14 @@ static void test_modes() {
   CHECK(d.mode_count == LUZVDA_MAX_MODES);
   CHECK(d.preferred_mode == 0);
 
+  // From a display's description: the same modes, preferred included
+  auto described = display(macbook({1512, 982, 60000}), "MacBook Pro", k_Guid);
+  auto from_desc = update(described);
+  CHECK(from_desc.struct_size == sizeof(LUZVDA_UPDATE_MODES));
+  CHECK(std::memcmp(from_desc.monitor_guid.bytes, k_Guid.data(), 16) == 0);
+  CHECK(from_desc.mode_count == described.mode_count && from_desc.preferred_mode == described.preferred_mode);
+  CHECK(std::memcmp(from_desc.modes, described.modes, sizeof(LUZVDA_MODE) * described.mode_count) == 0);
+
   auto u = update(macbook({1512, 982, 60000}), k_Guid);
   CHECK(u.struct_size == sizeof(LUZVDA_UPDATE_MODES));
   CHECK(std::memcmp(u.monitor_guid.bytes, k_Guid.data(), 16) == 0);
