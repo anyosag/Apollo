@@ -26,6 +26,7 @@
 
 // local includes
 #include "config.h"
+#include "fork/vdisplay_mode.h"
 #include "platform/common.h"
 #include "rtsp.h"
 #include "utility.h"
@@ -91,7 +92,6 @@ namespace proc {
     bool auto_detach;
     bool wait_all;
     bool virtual_display;
-    bool virtual_display_primary;
     bool use_app_identity;
     bool per_client_app_identity;
     bool allow_client_commands;
@@ -140,6 +140,23 @@ namespace proc {
     void pause();
     void terminate(bool immediate = false, bool needs_refresh = true);
 
+#ifdef _WIN32
+    /// [fork] What reconfigure_virtual_display() did
+    enum class vdisplay_change_e {
+      unchanged,  ///< The display already ran the mode
+      mode_changed,  ///< The mode or HDR state changed
+      replugged,  ///< The driver didn't offer the mode, so the display was re-created with it
+      failed,  ///< Re-creating the display failed; there is none now
+    };
+
+    /**
+     * @brief [fork] Gives the running app's virtual display the mode and HDR state a resuming client
+     * asks for. A resume, or a launch of the app already running, used to keep the display as the
+     * first client set it up.
+     */
+    vdisplay_change_e reconfigure_virtual_display(const rtsp_stream::launch_session_t &session);
+#endif
+
   private:
     int _app_id = 0;
     std::string _app_name;
@@ -162,6 +179,15 @@ namespace proc {
     file_t _pipe;
     std::vector<cmd_t>::const_iterator _app_prep_it;
     std::vector<cmd_t>::const_iterator _app_prep_begin;
+
+#ifdef _WIN32
+    // [fork] The virtual display's identity, kept to re-create it on resume
+    std::string _vdisplay_uuid;
+    std::string _vdisplay_client_name;
+
+    bool setup_virtual_display(const vdisplay_mode::display_mode_t &mode, const GUID &guid, bool apply_mode);
+    void apply_virtual_display_hdr(const std::string &display, bool enable_hdr, bool record_initial);
+#endif
   };
 
   boost::filesystem::path

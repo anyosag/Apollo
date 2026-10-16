@@ -30,10 +30,14 @@ Fork code lives in new files: `src/fork/`, `tests/fork/`, `.github/workflows/` a
 | `cmake/compile_definitions/common.cmake` | Globs `src/fork/*.cpp` and `*.h` into the build, after the NVENC sources |
 | `cmake/compile_definitions/windows.cmake` | Links `z` and defines `CLIPBUNDLE_WITH_ZLIB` |
 | `src/config.cpp` | `fork_tweaks::apply_config(vars)` before the `flags` option is read |
-| `src/process.cpp` | `fork_tweaks::apply_app_encoder_overrides(app.uuid)` in `proc_t::execute()`, after the per-app gamepad override; `fork_tweaks::restore_app_encoder_overrides()` in `terminate()` |
+| `src/process.cpp` | `fork_tweaks::apply_app_encoder_overrides(app.uuid)` in `proc_t::execute()`, after the per-app gamepad override; `fork_tweaks::restore_app_encoder_overrides()` in `terminate()`. Virtual display: the size and rate math in `execute()` comes from `fork/vdisplay_mode.h`; creating the display is `setup_virtual_display()` and the HDR workaround `apply_virtual_display_hdr()`, both also used by the new `reconfigure_virtual_display()`; `VDISPLAY::setRenderAdapter()` replaces the by-name call; timing and mode-change counts are logged |
+| `src/process.h` | `reconfigure_virtual_display()` and the members above; `ctx_t::virtual_display_primary` removed (never set or read) |
 | `src/video.cpp` | `fork_tweaks::try_reuse_encoder_probe()` in the "another probe is required" check of `probe_encoders()`; `fork_tweaks::invalidate_encoder_probe()` when `make_encode_session()` fails during a stream |
-| `src/nvhttp.cpp` | `getClipboard`/`setClipboard` accept `type=bundle` and hand it to `fork_tweaks::clipboard` after upstream's permission and session checks; a missing `type` is a 400 instead of an exception; a failed text set returns after its 500 instead of also sending a 200; `max_request_streambuf_size` raised for bundles |
+| `src/nvhttp.cpp` | `reconfigure_virtual_display()` in `launch()` (for the app already running) and `resume()`, in the `else` of upstream's "no active sessions and no virtual display" block. `getClipboard`/`setClipboard` accept `type=bundle` and hand it to `fork_tweaks::clipboard` after upstream's permission and session checks; a missing `type` is a 400 instead of an exception; a failed text set returns after its 500 instead of also sending a 200; `max_request_streambuf_size` raised for bundles |
 | `src/stream.cpp` | The `IDX_SET_CLIPBOARD` log line shows the size, not the contents |
+| `src/main.cpp` | The encoder probe's temporary display uses `VDISPLAY::setRenderAdapter()`, and its rate is 60000 mHz instead of 60 |
+| `src/platform/windows/virtual_display.*` | Logs through `BOOST_LOG` (it used `printf`, which the service loses); the isolated layout's geometry moved to `display_layout.h`; `getDisplayMode()`, `takeModeStats()`, `setRenderAdapter()` added; the ping thread gives up after 4 failures in a row instead of 4 in total; unused functions removed |
+| `third-party/sudovda/sudovda.h` | `OpenDevice()` frees its buffer when the device opens and checks the size first; `GetAddedDisplayName()` matches the adapter as well as the target id, falling back to the id alone |
 | `tests/CMakeLists.txt` | `tests/fork/` excluded from upstream's test glob |
 
 ### Upstream fixes carried by the fork
@@ -104,9 +108,18 @@ In `sunshine.conf`. `apply_config()` reads them and removes them from the option
   - The device needs Apollo's Clipboard permissions; upstream's checks apply unchanged.
   - Logs show types and sizes, never content: `clipboard: sent <types> to [<device>], <n> bytes on the wire` and `clipboard: received <types> from [<device>]`. The formats the source app offered are logged at debug level.
 
+- **Virtual display** (`src/fork/vdisplay_mode.h`, `src/platform/windows/display_layout.h`, `src/process.cpp`):
+  - A resume, or a launch of the app already running, gives the virtual display the size, rate and HDR state the client now asks for. Upstream kept the display as the first launch set it up, so resuming from another screen or aspect ratio streamed a scaled picture. Only when no one else is streaming; otherwise the log says the mode was kept.
+    - If the driver doesn't offer the new mode on that display (SudoVDA lists fixed modes plus scaled copies of the first one, so 3024x1890 after 3024x1964 isn't there), the display is removed and created again with the same identity. Windows moves the app's windows off it and back, which a mode change wouldn't.
+    - Logs: `vdisplay: resume asks for <mode>, <display> runs <mode>`, then `vdisplay: resume handled in <n> ms, <m> mode changes, <h> HDR switches`.
+  - Without an `adapter_name`, the virtual display renders on the hardware GPU with the most dedicated video memory, which then also encodes. Upstream left the choice to the driver. Log: `vdisplay: rendering on <GPU> (<n> MB dedicated)`.
+  - The isolated layout (`isolated_virtual_display_option`) had two bugs: a leak of every display but the first on each launch, and an uninitialized x offset when no display sat at (0, 0). Testing its geometry on 2,000 random desktops found a third: about 1 in 40 ended with displays overlapping each other. Where upstream's layout is valid it's used unchanged; otherwise moves that would overlap are skipped, and if a display still can't be placed, the layout is left as Windows made it (logged).
+  - Each launch logs `vdisplay: ready in <n> ms after launch began, <m> mode changes` and `vdisplay: HDR set <n> ms after launch began, <h> HDR switches`: the baseline for cutting the flashing at launch.
+
 ## Tests
 
 `tests/fork/` holds standalone programs with no Apollo dependencies, built and run by the "Fork unit tests" step of the Windows build:
 
 - `clipbundle_test.cpp`: the bundle format and send rules (shared with LuzLunar).
 - `clipboard_win_smoke.cpp`: a round trip through the real Windows clipboard; it skips when the runner has no clipboard.
+- `header/*_test.cpp`: one program each for header-only code: what clients send (`client_args`), control packets, input packets, Web UI login, the virtual display's mode (`vdisplay_mode`) and the isolated layout (`display_layout`, including the random desktops above).

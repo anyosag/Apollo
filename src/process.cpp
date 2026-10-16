@@ -77,6 +77,21 @@ namespace proc {
       }
     }
   }
+
+  /**
+   * @brief Waits up to about 3 s for Windows to accept display changes again.
+   */
+  static bool wait_for_display_settings() {
+    auto retryInterval = 200ms;
+    while (is_changing_settings_going_to_fail()) {
+      if (retryInterval > 2s) {
+        return false;
+      }
+      std::this_thread::sleep_for(retryInterval);
+      retryInterval *= 2;
+    }
+    return true;
+  }
 #endif
 
   class deinit_t: public platf::deinit_t {
@@ -185,32 +200,27 @@ namespace proc {
       terminate(false, false);
     }
 
+    // [fork] For the virtual display's timing in the log
+    [[maybe_unused]] auto launch_start = std::chrono::steady_clock::now();
+
     _app = app;
     _app_id = util::from_view(app.id);
     _app_name = app.name;
     _launch_session = launch_session;
     allow_client_commands = app.allow_client_commands;
 
-    uint32_t client_width = launch_session->width ? launch_session->width : 1920;
-    uint32_t client_height = launch_session->height ? launch_session->height : 1080;
+    // [fork] Shared with reconfigure_virtual_display(), in fork/vdisplay_mode.h
+    int scale_factor = vdisplay_mode::effective_scale(launch_session->scale_factor, _app.scale_factor);
+    auto vdisplay_target = vdisplay_mode::for_client(
+      launch_session->width,
+      launch_session->height,
+      launch_session->fps,
+      scale_factor,
+      config::video.double_refreshrate
+    );
 
-    uint32_t render_width = client_width;
-    uint32_t render_height = client_height;
-
-    int scale_factor = launch_session->scale_factor;
-    if (_app.scale_factor != 100) {
-      scale_factor = _app.scale_factor;
-    }
-
-    if (scale_factor != 100) {
-      render_width *= ((float)scale_factor / 100);
-      render_height *= ((float)scale_factor / 100);
-
-      // Chop the last bit to ensure the scaled resolution is even numbered
-      // Most odd resolutions won't work well
-      render_width &= ~1;
-      render_height &= ~1;
-    }
+    uint32_t render_width = vdisplay_target.width;
+    uint32_t render_height = vdisplay_target.height;
 
     launch_session->width = render_width;
     launch_session->height = render_height;
@@ -249,10 +259,12 @@ namespace proc {
       }
 
       if (vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK) {
-        // Try set the render adapter matching the capture adapter if user has specified one
-        if (!config::video.adapter_name.empty()) {
-          VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name));
-        }
+        // [fork] Count the mode changes this launch makes
+        VDISPLAY::takeModeStats();
+
+        // [fork] The adapter the user configured, or else the GPU with the most video memory, which
+        // then also encodes
+        VDISPLAY::setRenderAdapter(config::video.adapter_name);
 
         std::string device_name;
         std::string device_uuid_str;
@@ -281,56 +293,15 @@ namespace proc {
 
         memcpy(&launch_session->display_guid, &device_uuid, sizeof(GUID));
 
-        int target_fps = launch_session->fps ? launch_session->fps : 60000;
+        _vdisplay_uuid = device_uuid_str;
+        _vdisplay_client_name = device_name;
 
-        if (target_fps < 1000) {
-          target_fps *= 1000;
-        }
-
-        if (config::video.double_refreshrate) {
-          target_fps *= 2;
-        }
-
-        std::wstring vdisplayName = VDISPLAY::createVirtualDisplay(
-          device_uuid_str.c_str(),
-          device_name.c_str(),
-          render_width,
-          render_height,
-          target_fps,
-          launch_session->display_guid
-        );
+        // Don't change display settings when no params are given
+        setup_virtual_display(vdisplay_target, launch_session->display_guid, launch_session->fps != 0);
 
         // No matter we get the display name or not, the virtual display might still be created.
         // We need to track it properly to remove the display when the session terminates.
         launch_session->virtual_display = true;
-
-        if (!vdisplayName.empty()) {
-          BOOST_LOG(info) << "Virtual Display created at " << vdisplayName;
-
-          // Don't change display settings when no params are given
-          if (launch_session->width && launch_session->height && launch_session->fps) {
-            // Apply display settings
-            VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), render_width, render_height, target_fps);
-          }
-
-          // Check the ISOLATED DISPLAY configuration setting and rearrange the displays
-          if (config::video.isolated_virtual_display_option == true) {
-            // Apply the isolated display settings
-            VDISPLAY::changeDisplaySettings2(vdisplayName.c_str(), render_width, render_height, target_fps, true);
-          }
-
-          // Set virtual_display to true when everything went fine
-          this->virtual_display = true;
-          this->display_name = platf::to_utf8(vdisplayName);
-
-          // When using virtual display, we don't care which display user configured to use.
-          // So we always set output_name to the newly created virtual display as a workaround for
-          // empty name when probing graphics cards.
-
-          config::video.output_name = display_device::map_display_name(this->display_name);
-        } else {
-          BOOST_LOG(warning) << "Virtual Display creation failed, or cannot get created display name in time!";
-        }
       } else {
         // Driver isn't working so we don't need to track virtual display.
         launch_session->virtual_display = false;
@@ -343,6 +314,10 @@ namespace proc {
     // It is already handled by Windows properly.
     if (this->virtual_display) {
       display_device::reset_persistence();
+
+      auto stats = VDISPLAY::takeModeStats();
+      BOOST_LOG(info) << "vdisplay: ready in "sv << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - launch_start).count()
+                      << " ms after launch began, "sv << stats.mode_sets << " mode changes"sv;
     }
 
 #else
@@ -499,20 +474,15 @@ namespace proc {
     _app_launch_time = std::chrono::steady_clock::now();
 
   #ifdef _WIN32
-    auto resetHDRThread = std::thread([this, enable_hdr = launch_session->enable_hdr]{
+    auto resetHDRThread = std::thread([this, enable_hdr = launch_session->enable_hdr, launch_start]{
       // Windows doesn't seem to be able to set HDR correctly when a display is just connected / changed resolution,
       // so we have tooggle HDR for the virtual display manually after a delay.
-      auto retryInterval = 200ms;
-      while (is_changing_settings_going_to_fail()) {
-        if (retryInterval > 2s) {
-          BOOST_LOG(warning) << "Restoring HDR settings failed due to retry timeout!";
-          return;
-        }
-        std::this_thread::sleep_for(retryInterval);
-        retryInterval *= 2;
+      if (!wait_for_display_settings()) {
+        BOOST_LOG(warning) << "Restoring HDR settings failed due to retry timeout!";
+        return;
       }
 
-      retryInterval = 200ms;
+      auto retryInterval = 200ms;
       while (this->display_name.empty()) {
         if (retryInterval > 2s) {
           BOOST_LOG(warning) << "Not getting current display in time! HDR will not be toggled.";
@@ -524,31 +494,11 @@ namespace proc {
 
       // We should have got the actual streaming display by now
       std::string currentDisplay = this->display_name;
-      auto currentDisplayW = platf::from_utf8(currentDisplay);
+      apply_virtual_display_hdr(currentDisplay, enable_hdr, true);
 
-      initial_hdr = VDISPLAY::getDisplayHDRByName(currentDisplayW.c_str());
-
-      if (config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic) {
-        mode_changed_display = currentDisplay;
-
-        // Try turn off HDR whatever
-        // As we always have to apply the workaround by turining off HDR first
-        VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), false);
-
-        if (enable_hdr) {
-          if (VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), true)) {
-            BOOST_LOG(info) << "HDR enabled for display " << currentDisplay;
-          } else {
-            BOOST_LOG(info) << "HDR enable failed for display " << currentDisplay;
-          }
-        }
-      } else if (initial_hdr) {
-        if (VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), false) && VDISPLAY::setDisplayHDRByName(currentDisplayW.c_str(), true)) {
-          BOOST_LOG(info) << "HDR toggled successfully for display " << currentDisplay;
-        } else {
-          BOOST_LOG(info) << "HDR toggle failed for display " << currentDisplay;
-        }
-      }
+      auto stats = VDISPLAY::takeModeStats();
+      BOOST_LOG(info) << "vdisplay: HDR set "sv << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - launch_start).count()
+                      << " ms after launch began, "sv << stats.hdr_changes << " HDR switches"sv;
     });
 
     resetHDRThread.detach();
@@ -562,6 +512,145 @@ namespace proc {
 
     return 0;
   }
+
+#ifdef _WIN32
+  // [fork] Creates the virtual display, sets its mode and, if configured, the isolated layout,
+  // and makes it the display Apollo captures
+  bool proc_t::setup_virtual_display(const vdisplay_mode::display_mode_t &mode, const GUID &guid, bool apply_mode) {
+    std::wstring vdisplayName = VDISPLAY::createVirtualDisplay(
+      _vdisplay_uuid.c_str(),
+      _vdisplay_client_name.c_str(),
+      mode.width,
+      mode.height,
+      mode.refresh_mhz,
+      guid
+    );
+
+    if (vdisplayName.empty()) {
+      BOOST_LOG(warning) << "Virtual Display creation failed, or cannot get created display name in time!";
+      return false;
+    }
+
+    BOOST_LOG(info) << "Virtual Display created at " << platf::to_utf8(vdisplayName);
+
+    if (apply_mode) {
+      // Apply display settings
+      VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), mode.width, mode.height, mode.refresh_mhz);
+    }
+
+    // Check the ISOLATED DISPLAY configuration setting and rearrange the displays
+    if (config::video.isolated_virtual_display_option == true) {
+      // Apply the isolated display settings
+      VDISPLAY::changeDisplaySettings2(vdisplayName.c_str(), mode.width, mode.height, mode.refresh_mhz, true);
+    }
+
+    // Set virtual_display to true when everything went fine
+    this->virtual_display = true;
+    this->display_name = platf::to_utf8(vdisplayName);
+
+    // When using virtual display, we don't care which display user configured to use.
+    // So we always set output_name to the newly created virtual display as a workaround for
+    // empty name when probing graphics cards.
+    config::video.output_name = display_device::map_display_name(this->display_name);
+    return true;
+  }
+
+  // [fork] The HDR workaround from execute(): Windows doesn't set HDR correctly right after a
+  // display connects or changes mode, so HDR is switched off and back on
+  void proc_t::apply_virtual_display_hdr(const std::string &display, bool enable_hdr, bool record_initial) {
+    auto displayW = platf::from_utf8(display);
+
+    bool hdr = VDISPLAY::getDisplayHDRByName(displayW.c_str());
+    if (record_initial) {
+      initial_hdr = hdr;
+    }
+
+    if (config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic) {
+      mode_changed_display = display;
+
+      // Try turn off HDR whatever
+      // As we always have to apply the workaround by turining off HDR first
+      VDISPLAY::setDisplayHDRByName(displayW.c_str(), false);
+
+      if (enable_hdr) {
+        if (VDISPLAY::setDisplayHDRByName(displayW.c_str(), true)) {
+          BOOST_LOG(info) << "HDR enabled for display " << display;
+        } else {
+          BOOST_LOG(info) << "HDR enable failed for display " << display;
+        }
+      }
+    } else if (hdr) {
+      if (VDISPLAY::setDisplayHDRByName(displayW.c_str(), false) && VDISPLAY::setDisplayHDRByName(displayW.c_str(), true)) {
+        BOOST_LOG(info) << "HDR toggled successfully for display " << display;
+      } else {
+        BOOST_LOG(info) << "HDR toggle failed for display " << display;
+      }
+    }
+  }
+
+  proc_t::vdisplay_change_e proc_t::reconfigure_virtual_display(const rtsp_stream::launch_session_t &session) {
+    if (!virtual_display || display_name.empty() || !_launch_session || vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
+      return vdisplay_change_e::unchanged;
+    }
+
+    auto start = std::chrono::steady_clock::now();
+    VDISPLAY::takeModeStats();
+
+    int scale_factor = vdisplay_mode::effective_scale(session.scale_factor, _app.scale_factor);
+    auto want = vdisplay_mode::for_client(session.width, session.height, session.fps, scale_factor, config::video.double_refreshrate);
+
+    auto displayW = platf::from_utf8(display_name);
+    int width = 0;
+    int height = 0;
+    int refresh_mhz = 0;
+    bool known = VDISPLAY::getDisplayMode(displayW.c_str(), width, height, refresh_mhz);
+
+    bool hdr_automatic = config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic;
+    bool hdr_differs = hdr_automatic && VDISPLAY::getDisplayHDRByName(displayW.c_str()) != session.enable_hdr;
+
+    auto result = vdisplay_change_e::unchanged;
+    if (!known || !vdisplay_mode::runs(want, width, height, refresh_mhz)) {
+      BOOST_LOG(info) << "vdisplay: resume asks for "sv << want.width << 'x' << want.height << 'x' << want.refresh_mhz
+                      << " mHz, "sv << display_name << " runs "sv << width << 'x' << height << 'x' << refresh_mhz << " mHz"sv;
+
+      VDISPLAY::changeDisplaySettings(displayW.c_str(), want.width, want.height, want.refresh_mhz);
+      if (VDISPLAY::getDisplayMode(displayW.c_str(), width, height, refresh_mhz) && vdisplay_mode::runs(want, width, height, refresh_mhz)) {
+        result = vdisplay_change_e::mode_changed;
+      } else {
+        // The driver only offers some modes on a display; a new one gets the new size as its own
+        BOOST_LOG(info) << "vdisplay: the driver doesn't offer that mode on "sv << display_name << ", re-creating the display"sv;
+
+        VDISPLAY::removeVirtualDisplay(_launch_session->display_guid);
+        virtual_display = false;
+        display_name.clear();
+        mode_changed_display.clear();
+
+        result = setup_virtual_display(want, _launch_session->display_guid, true) ? vdisplay_change_e::replugged : vdisplay_change_e::failed;
+      }
+    } else if (hdr_differs) {
+      result = vdisplay_change_e::mode_changed;
+    }
+
+    if (result == vdisplay_change_e::mode_changed || result == vdisplay_change_e::replugged) {
+      if (wait_for_display_settings()) {
+        apply_virtual_display_hdr(display_name, session.enable_hdr, false);
+      } else {
+        BOOST_LOG(warning) << "vdisplay: Windows didn't accept display changes in time, HDR left as it is"sv;
+      }
+
+      _launch_session->width = want.width;
+      _launch_session->height = want.height;
+      _launch_session->fps = session.fps;
+      _launch_session->enable_hdr = session.enable_hdr;
+    }
+
+    auto stats = VDISPLAY::takeModeStats();
+    BOOST_LOG(info) << "vdisplay: resume handled in "sv << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count()
+                    << " ms, "sv << stats.mode_sets << " mode changes, "sv << stats.hdr_changes << " HDR switches"sv;
+
+    return result;
+  }
+#endif
 
   int proc_t::running() {
 #ifndef _WIN32

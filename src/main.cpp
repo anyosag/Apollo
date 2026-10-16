@@ -366,16 +366,16 @@ int main(int argc, char *argv[]) {
 
       BOOST_LOG(info) << "Creating a temporary virtual display to probe for encoders..."sv;
 
-      if (!config::video.adapter_name.empty()) {
-        VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name));
-      }
+      // [fork] The configured adapter, or else the GPU with the most video memory
+      VDISPLAY::setRenderAdapter(config::video.adapter_name);
 
+      // [fork] The rate is in millihertz, like everywhere else
       VDISPLAY::createVirtualDisplay(
         probe_uuid_str.c_str(),
         "Probe",
         800,
         600,
-        60,
+        60000,
         *probe_guid
       );
 

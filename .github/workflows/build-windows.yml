@@ -134,7 +134,7 @@ jobs:
             tests/fork/clipboard_win_smoke.cpp src/fork/clipboard_win.cpp src/fork/clipbundle.cpp \
             -lz -lole32 -luser32 -o clipboard_win_smoke
           ./clipboard_win_smoke
-          # Checks on what clients send, in header-only code; each test is a program of its own
+          # Header-only fork code; each test is a program of its own
           for test in tests/fork/header/*_test.cpp; do
             name=$(basename "$test" .cpp)
             g++ -std=c++23 -Wall -Wextra -iquote src -Ithird-party "$test" -lcrypto -o "$name"

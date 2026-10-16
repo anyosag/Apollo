@@ -1199,6 +1199,37 @@ namespace nvhttp {
 
   }
 
+#ifdef _WIN32
+  /**
+   * @brief [fork] Gives the running app's virtual display the mode a resuming client asks for. Only
+   * when no one else is streaming, since they would see the change too.
+   * @return false after filling in the error response, when the display couldn't be set up again.
+   */
+  static bool reconfigure_virtual_display(bool no_active_sessions, const rtsp_stream::launch_session_t &launch_session, pt::ptree &tree) {
+    if (!proc::proc.virtual_display) {
+      return true;
+    }
+
+    if (!no_active_sessions) {
+      BOOST_LOG(info) << "vdisplay: another client is streaming, so the virtual display keeps its mode"sv;
+      return true;
+    }
+
+    using change_e = proc::proc_t::vdisplay_change_e;
+    auto change = proc::proc.reconfigure_virtual_display(launch_session);
+
+    // A re-created display may be on another adapter, so check the encoder again
+    if (change == change_e::failed || (change == change_e::replugged && video::probe_encoders())) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "Failed to initialize video capture/encoding. Is a display connected and turned on?");
+      return false;
+    }
+
+    return true;
+  }
+#endif
+
   void launch(bool &host_audio, resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
@@ -1352,6 +1383,11 @@ namespace nvhttp {
             return;
           }
         }
+#ifdef _WIN32
+        else if (!reconfigure_virtual_display(no_active_sessions, *launch_session, tree)) {
+          return;
+        }
+#endif
       } else {
         const auto& apps = proc::proc.get_apps();
         auto app_iter = std::find_if(apps.begin(), apps.end(), [&appid_str, &appuuid_str](const auto _app) {
@@ -1493,6 +1529,11 @@ namespace nvhttp {
         return;
       }
     }
+#ifdef _WIN32
+    else if (!reconfigure_virtual_display(no_active_sessions, *launch_session, tree)) {
+      return;
+    }
+#endif
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
     if (!launch_session->rtsp_cipher && encryption_mode == config::ENCRYPTION_MODE_MANDATORY) {
