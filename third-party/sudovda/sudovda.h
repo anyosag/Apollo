@@ -36,7 +36,15 @@ static const HANDLE OpenDevice(const GUID* interfaceGuid) {
 		DWORD detailSize = 0;
 		SetupDiGetDeviceInterfaceDetailA(deviceInfoSet, &deviceInterfaceData, NULL, 0, &detailSize, NULL);
 
+		// [fork] A failed size query leaves detailSize at 0, too small for cbSize
+		if (detailSize < sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A)) {
+			continue;
+		}
+
 		SP_DEVICE_INTERFACE_DETAIL_DATA_A *detail = (SP_DEVICE_INTERFACE_DETAIL_DATA_A *)calloc(1, detailSize);
+		if (!detail) {
+			continue;
+		}
 		detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A);
 
 		if (SetupDiGetDeviceInterfaceDetailA(deviceInfoSet, &deviceInterfaceData, detail, detailSize, &detailSize, NULL))
@@ -48,13 +56,14 @@ static const HANDLE OpenDevice(const GUID* interfaceGuid) {
 				OPEN_EXISTING,
 				FILE_ATTRIBUTE_NORMAL | FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED | FILE_FLAG_WRITE_THROUGH,
 				NULL);
-
-			if (handle != NULL && handle != INVALID_HANDLE_VALUE) {
-				break;
-			}
 		}
 
 		free(detail);
+
+		// [fork] detail used to leak when the device opened
+		if (handle != NULL && handle != INVALID_HANDLE_VALUE) {
+			break;
+		}
 	}
 
 	SetupDiDestroyDeviceInfoList(deviceInfoSet);
@@ -224,9 +233,18 @@ static const bool GetAddedDisplayName(const VIRTUAL_DISPLAY_ADD_OUT& addedDispla
 	if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr))
 		return 0;
 
+	// [fork] Target ids are only unique per adapter, so match the adapter too. Falls back to the id
+	// alone in case the path names a different adapter than the driver reported.
 	auto path = std::find_if(paths.begin(), paths.end(), [&addedDisplay](DISPLAYCONFIG_PATH_INFO _path) {
-		return _path.targetInfo.id == addedDisplay.TargetId;
+		return _path.targetInfo.id == addedDisplay.TargetId &&
+			_path.targetInfo.adapterId.LowPart == addedDisplay.AdapterLuid.LowPart &&
+			_path.targetInfo.adapterId.HighPart == addedDisplay.AdapterLuid.HighPart;
 	});
+	if (path == paths.end()) {
+		path = std::find_if(paths.begin(), paths.end(), [&addedDisplay](DISPLAYCONFIG_PATH_INFO _path) {
+			return _path.targetInfo.id == addedDisplay.TargetId;
+		});
+	}
 
 	if (path == paths.end()) {
 		return false;
