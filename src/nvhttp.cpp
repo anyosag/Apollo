@@ -23,6 +23,7 @@
 // local includes
 #include "config.h"
 #include "display_device.h"
+#include "atomic_file.h"
 #include "file_handler.h"
 #include "fork/clipboard_bundle.h"  // [fork]
 #include "globals.h"
@@ -278,11 +279,10 @@ namespace nvhttp {
 
     root["root"]["named_devices"] = named_cert_nodes;
 
-    try {
-      std::ofstream out(config::nvhttp.file_state);
-      out << root.dump(4);  // Pretty-print with an indent of 4 spaces.
-    } catch (std::exception &e) {
-      BOOST_LOG(error) << "Couldn't write "sv << config::nvhttp.file_state << ": "sv << e.what();
+    // Replaced in one step: this file usually holds the Web UI credentials too, and half a file would
+    // lose them
+    if (!file_handler::write_file_atomic(config::nvhttp.file_state, root.dump(4), true)) {
+      BOOST_LOG(error) << "Couldn't write "sv << config::nvhttp.file_state;
       return;
     }
   }
