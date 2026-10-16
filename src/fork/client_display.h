@@ -20,7 +20,7 @@
 #include <vector>
 
 // local includes
-#include "fork/vdisplay_mode.h"
+#include "vdisplay_mode.h"
 
 namespace client_display {
   enum class hdr_e {

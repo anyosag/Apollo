@@ -19,7 +19,7 @@
 #include <luzvda/luzvda-ioctl.h>
 
 // local includes
-#include "fork/client_display.h"
+#include "client_display.h"
 
 namespace luzvda_desc {
   /// A GUID's 16 bytes, as they lie in memory
