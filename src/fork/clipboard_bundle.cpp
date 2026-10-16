@@ -180,6 +180,9 @@ namespace fork_tweaks::clipboard {
       }
       token = token_for(snapshot.sequence);
       BOOST_LOG(debug) << "clipboard: formats offered: "sv << join(snapshot.formats);
+      if (snapshot.image_not_sent) {
+        BOOST_LOG(info) << "clipboard: an image was offered but isn't sent (a text copy, or it couldn't be converted); formats: "sv << join(snapshot.formats);
+      }
 
       if (snapshot.concealed && automatic) {
         BOOST_LOG(info) << "clipboard: not sending private content to ["sv << device << "] automatically"sv;
