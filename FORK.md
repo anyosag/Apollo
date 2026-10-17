@@ -89,7 +89,7 @@ In `sunshine.conf`. `apply_config()` reads them and removes them from the option
   - Logs: `fork: reusing encoder probe for [<encoder>], …` or `fork: running a full encoder probe (<reason>)`.
 - **Frame loss in the log** (`src/fork/frame_loss.h`):
   - Moonlight clients report each frame that needed repair from FEC parity packets or couldn't be repaired (`SS_FRAME_FEC_STATUS`, type `0x5502`). Upstream had no handler, so the reports only reached the debug log as unknown messages. A report is told apart as repaired or lost by whether the client had as many packets, data and parity together, as the frame had data packets.
-  - While a client reports losses, at most every 10 s: `fork: frame loss for client [<device>] in the last 10.0 s, <n> frames repaired with FEC, <n> frames lost (<n> of <n> data packets missing in those frames), <n> reference invalidations, <n> keyframe requests; FEC <n>%`.
+  - While a client reports lost or repaired frames, or reference invalidations, at most every 10 s (keyframe requests alone don't count: clients ask for them at every start): `fork: frame loss for client [<device>] in the last 10.0 s, <n> frames repaired with FEC, <n> frames lost (<n> of <n> data packets missing in those frames), <n> reference invalidations, <n> keyframe requests; FEC <n>%`.
   - When a stream ends, the same for the whole stream (`… over 30.0 min, …`), also when nothing was lost.
   - Only logging: nothing changes the bitrate or FEC yet. It's the measurement for adaptive bitrate.
 - **Rich clipboard sync for LuzLunar** (`src/fork/clipbundle.*`, `clipboard_win.*`, `clipboard_bundle.*`):

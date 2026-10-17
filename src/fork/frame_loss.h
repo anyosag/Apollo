@@ -88,8 +88,10 @@ namespace frame_loss {
     uint64_t invalidations = 0;  ///< Requests to stop referencing a range of frames
     uint64_t keyframe_requests = 0;
 
-    bool any() const {
-      return frames_repaired || frames_lost || invalidations || keyframe_requests;
+    /// Lost or repaired video. Keyframe requests alone don't count: a client asks for one or two
+    /// when every stream starts and one when it ends.
+    bool losses() const {
+      return frames_repaired || frames_lost || invalidations;
     }
 
     void add(const counts_t &other) {
@@ -141,8 +143,8 @@ namespace frame_loss {
     }
 
     /**
-     * @brief The line for the time since the last one, once `every` has passed and something was
-     * reported. Nothing otherwise.
+     * @brief The line for the time since the last one, once `every` has passed and the client
+     * reported lost or repaired video. Nothing otherwise.
      */
     std::optional<std::string> take_summary(clock::time_point now, clock::duration every) {
       start(now);
@@ -153,7 +155,7 @@ namespace frame_loss {
       finish_frame();
       auto seconds = std::chrono::duration<double>(now - _window_start).count();
       std::optional<std::string> line;
-      if (_window.any()) {
+      if (_window.losses()) {
         line = "in the last " + format_seconds(seconds) + ", " + describe(_window);
       }
 

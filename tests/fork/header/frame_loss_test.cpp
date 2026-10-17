@@ -136,6 +136,20 @@ static void test_blocks_of_one_frame() {
   CHECK(t.total().data_packets_missing == 1 + 20 + 1 + 2);
 }
 
+static void test_keyframe_requests_alone() {
+  tracker_t t;
+  auto t0 = tracker_t::clock::time_point {} + 100s;
+
+  // A clean stream's start-up keyframe requests make no 10 s line (round 4 logged one per stream)
+  t.add_keyframe_request(t0 + 1s);
+  t.add_keyframe_request(t0 + 2s);
+  CHECK(!t.take_summary(t0 + 10s, 10s).has_value());
+  CHECK(!t.take_summary(t0 + 20s, 10s).has_value());
+
+  // ... but the total has them
+  CHECK(t.take_total(t0 + 30s) == "over 29.0 s, 0 frames repaired with FEC, 0 frames lost, 0 reference invalidations, 2 keyframe requests");
+}
+
 static void test_clean_total() {
   tracker_t t;
   auto t0 = tracker_t::clock::time_point {} + 100s;
@@ -149,6 +163,7 @@ int main() {
   test_repairable();
   test_summary();
   test_blocks_of_one_frame();
+  test_keyframe_requests_alone();
   test_clean_total();
 
   if (s_Failures) {
