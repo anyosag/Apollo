@@ -234,7 +234,7 @@ function addRemappingEntry() {
           <Checkbox id="dd_wa_virtual_display_hdr_toggle"
             locale-prefix="config"
             v-model="config.dd_wa_virtual_display_hdr_toggle"
-            default="true"
+            default="false"
           ></Checkbox>
         </div>
         <!-- HDR toggle -->

@@ -510,7 +510,7 @@ namespace config {
       {},  // mode_remapping
       {
         {},  // hdr_toggle_delay
-        true,  // virtual_display_hdr_toggle
+        false,  // virtual_display_hdr_toggle: not needed on LuzVDA's displays (round 3)
       }  // wa
     },  // display_device
 
