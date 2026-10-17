@@ -229,6 +229,14 @@ function addRemappingEntry() {
           <option value="disabled">{{ $t('config.dd_hdr_option_disabled') }}</option>
           <option value="auto">{{ $t('config.dd_hdr_option_auto') }}</option>
         </select>
+        <!-- [fork] The virtual display's HDR off/on at stream start -->
+        <div class="mb-3" v-if="config.dd_hdr_option === 'auto'">
+          <Checkbox id="dd_wa_virtual_display_hdr_toggle"
+            locale-prefix="config"
+            v-model="config.dd_wa_virtual_display_hdr_toggle"
+            default="false"
+          ></Checkbox>
+        </div>
         <!-- HDR toggle -->
         <!-- <label for="dd_wa_hdr_toggle_delay" class="form-label">
           {{ $t('config.dd_wa_hdr_toggle_delay') }}

@@ -24,6 +24,7 @@ extern "C" {
 #include "control_packet.h"
 #include "crypto.h"
 #include "display_device.h"
+#include "fork/frame_loss.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -424,6 +425,9 @@ namespace stream {
     safe::signal_t controlEnd;
 
     std::atomic<session::state_e> state;
+
+    /// [fork] The client's loss reports, counted for the log (control stream thread only)
+    frame_loss::tracker_t frame_loss;
   };
 
   /**
@@ -961,6 +965,7 @@ namespace stream {
     server->map(packetTypes[IDX_REQUEST_IDR_FRAME], [&](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_REQUEST_IDR_FRAME]"sv;
 
+      session->frame_loss.add_keyframe_request(std::chrono::steady_clock::now());
       session->video.idr_events->raise(true);
     });
 
@@ -974,7 +979,22 @@ namespace stream {
         << "firstFrame [" << firstFrame << ']' << std::endl
         << "lastFrame [" << lastFrame << ']';
 
+      session->frame_loss.add_invalidation(std::chrono::steady_clock::now());
       session->video.invalidate_ref_frames_events->raise(std::make_pair(firstFrame, lastFrame));
+    });
+
+    // [fork] The client's report on a frame that needed FEC repair or couldn't be repaired. Its type,
+    // 0x5502, is also the host's "Set RGB LED", which only goes the other way.
+    server->map(0x5502, [&](session_t *session, const std::string_view &payload) {
+      auto status = frame_loss::parse_fec_status(payload);
+      if (!status) {
+        BOOST_LOG(debug) << "type [FEC status] too short: "sv << payload.size() << " bytes"sv;
+        return;
+      }
+
+      BOOST_LOG(verbose) << "type [FEC status] frame "sv << status->frame_index << ": "sv << status->received_data << '/' << status->total_data
+                         << " data and "sv << status->received_parity << '/' << status->total_parity << " parity packets"sv;
+      session->frame_loss.add_fec_status(*status, std::chrono::steady_clock::now());
     });
 
     server->map(packetTypes[IDX_INPUT_DATA], [&](session_t *session, const std::string_view &payload) {
@@ -1159,6 +1179,11 @@ namespace stream {
           }
 
           if (session->state.load(std::memory_order_acquire) == session::state_e::STOPPING) {
+            // [fork] The whole stream's losses, also when there were none
+            if (session->frame_loss.started()) {
+              BOOST_LOG(info) << "fork: frame loss for client ["sv << session->device_name << "] "sv << session->frame_loss.take_total(now);
+            }
+
             pos = server->_sessions->erase(pos);
 
             if (session->control.peer) {
@@ -1192,6 +1217,11 @@ namespace stream {
               auto hdr_info = hdr_queue->pop();
 
               send_hdr_mode(session, std::move(hdr_info));
+            }
+
+            // [fork] At most every 10 s, and only when the client reported losses
+            if (auto line = session->frame_loss.take_summary(now, 10s)) {
+              BOOST_LOG(info) << "fork: frame loss for client ["sv << session->device_name << "] "sv << *line;
             }
           }
 

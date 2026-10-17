@@ -487,6 +487,18 @@ namespace nvhttp {
     launch_session->virtual_display = util::from_view(get_arg(args, "virtualDisplay", "0")) || named_cert_p->always_use_virtual_display;
     launch_session->scale_factor = util::from_view(get_arg(args, "scaleFactor", "100"));
 
+    // [fork] The screen LuzLunar streams to, which the virtual display then describes
+    launch_session->client_screen = client_display::parse([&args](std::string_view key) -> std::optional<std::string> {
+      auto it = args.find(std::string(key));
+      if (it == args.end()) {
+        return std::nullopt;
+      }
+      return it->second;
+    });
+    if (launch_session->client_screen) {
+      BOOST_LOG(info) << "Client ["sv << launch_session->device_name << "] streams to "sv << client_display::summary(*launch_session->client_screen);
+    }
+
     launch_session->client_do_cmds = named_cert_p->do_cmds;
     launch_session->client_undo_cmds = named_cert_p->undo_cmds;
 
@@ -1199,6 +1211,37 @@ namespace nvhttp {
 
   }
 
+#ifdef _WIN32
+  /**
+   * @brief [fork] Gives the running app's virtual display the mode a resuming client asks for. Only
+   * when no one else is streaming, since they would see the change too.
+   * @return false after filling in the error response, when the display couldn't be set up again.
+   */
+  static bool reconfigure_virtual_display(bool no_active_sessions, const rtsp_stream::launch_session_t &launch_session, pt::ptree &tree) {
+    if (!proc::proc.virtual_display) {
+      return true;
+    }
+
+    if (!no_active_sessions) {
+      BOOST_LOG(info) << "vdisplay: another client is streaming, so the virtual display keeps its mode"sv;
+      return true;
+    }
+
+    using change_e = proc::proc_t::vdisplay_change_e;
+    auto change = proc::proc.reconfigure_virtual_display(launch_session);
+
+    // A re-created display may be on another adapter, so check the encoder again
+    if (change == change_e::failed || (change == change_e::replugged && video::probe_encoders())) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "Failed to initialize video capture/encoding. Is a display connected and turned on?");
+      return false;
+    }
+
+    return true;
+  }
+#endif
+
   void launch(bool &host_audio, resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
@@ -1352,6 +1395,11 @@ namespace nvhttp {
             return;
           }
         }
+#ifdef _WIN32
+        else if (!reconfigure_virtual_display(no_active_sessions, *launch_session, tree)) {
+          return;
+        }
+#endif
       } else {
         const auto& apps = proc::proc.get_apps();
         auto app_iter = std::find_if(apps.begin(), apps.end(), [&appid_str, &appuuid_str](const auto _app) {
@@ -1493,6 +1541,11 @@ namespace nvhttp {
         return;
       }
     }
+#ifdef _WIN32
+    else if (!reconfigure_virtual_display(no_active_sessions, *launch_session, tree)) {
+      return;
+    }
+#endif
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
     if (!launch_session->rtsp_cipher && encryption_mode == config::ENCRYPTION_MODE_MANDATORY) {

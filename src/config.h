@@ -91,6 +91,7 @@ namespace config {
     struct dd_t {
       struct workarounds_t {
         std::chrono::milliseconds hdr_toggle_delay;  ///< Specify whether to apply HDR high-contrast color workaround and what delay to use.
+        bool virtual_display_hdr_toggle;  ///< [fork] Turn a virtual display's HDR off and on when a stream starts, rather than only setting it.
       };
 
       enum class config_option_e {

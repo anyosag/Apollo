@@ -1282,6 +1282,34 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### dd_wa_virtual_display_hdr_toggle
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            When a stream starts on a virtual display, or the display is made again, switch its HDR off and then
+            back on, rather than only setting it to the state the client asked for. A workaround for HDR colors that
+            looked wrong right after a virtual display appeared; it costs two HDR switches, and a flash, at each start.
+            LuzVDA's displays don't need it, so it is off by default: Apollo's display configuration sets HDR to the
+            client's request as soon as the display arrives, and that alone gives the right picture.
+            @note{Applies to Windows only, with [dd_hdr_option](#dd_hdr_option) set to auto.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            dd_wa_virtual_display_hdr_toggle = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### dd_config_revert_delay
 
 <table>
