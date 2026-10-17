@@ -24,6 +24,7 @@ extern "C" {
 #include "control_packet.h"
 #include "crypto.h"
 #include "display_device.h"
+#include "fork/fork_config.h"
 #include "fork/frame_loss.h"
 #include "globals.h"
 #include "input.h"
@@ -428,6 +429,9 @@ namespace stream {
 
     /// [fork] The client's loss reports, counted for the log (control stream thread only)
     frame_loss::tracker_t frame_loss;
+
+    /// [fork] Stock Moonlight for iOS: its Touchscreen mode's fingers become touch
+    bool moonlight_ios = false;
   };
 
   /**
@@ -2129,6 +2133,11 @@ namespace stream {
     int start(session_t &session, const std::string &addr_string) {
       session.input = input::alloc(session.mail);
 
+      // [fork] Stock Moonlight for iOS: Touchscreen mode's fingers become touch, if it may send touch
+      if (session.moonlight_ios && fork_tweaks::ios_touch && (session.permission & crypto::PERM::input_touch) != crypto::PERM::_no) {
+        input::enable_touch_emulation(session.input, session.device_name);
+      }
+
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
         return -1;
@@ -2195,6 +2204,7 @@ namespace stream {
       session->device_name = launch_session.device_name;
       session->device_uuid = launch_session.unique_id;
       session->permission = launch_session.perm;
+      session->moonlight_ios = launch_session.moonlight_ios;  // [fork]
 
       session->do_cmds = std::move(launch_session.client_do_cmds);
       session->undo_cmds = std::move(launch_session.client_undo_cmds);

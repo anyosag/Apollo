@@ -64,6 +64,9 @@ namespace rtsp_stream {
     /// [fork] The screen a LuzLunar client streams to, for the virtual display; none from other clients
     std::optional<client_display::screen_t> client_screen;
 
+    /// [fork] Stock Moonlight for iOS, by its User-Agent: its Touchscreen mode's fingers can become touch
+    bool moonlight_ios = false;
+
   #ifdef _WIN32
     GUID display_guid{};
   #endif

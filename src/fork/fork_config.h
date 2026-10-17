@@ -19,6 +19,13 @@ namespace fork_tweaks {
   /// addresses `origin_web_ui_allowed` allows), not only from this PC.
   inline bool web_ui_remote_first_setup = false;
 
+  /// `fork_ios_touch`: stock Moonlight for iOS in Touchscreen mode: fingers reach Windows as touch, not
+  /// as mouse clicks (touch_emulation.h).
+  inline bool ios_touch = true;
+
+  /// `fork_ios_tablet_posture`: Windows in tablet posture while such a client touches (tablet_posture.h).
+  inline bool ios_tablet_posture = true;
+
   /**
    * @brief Read the fork-only options and remove them from @p vars, so they aren't reported as unrecognized.
    * @param vars The parsed sunshine.conf options.

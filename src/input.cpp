@@ -21,6 +21,9 @@ extern "C" {
 
 // local includes
 #include "config.h"
+#include "fork/fork_config.h"  // [fork]
+#include "fork/tablet_posture.h"  // [fork]
+#include "fork/touch_emulation.h"  // [fork]
 #include "globals.h"
 #include "input.h"
 #include "input_validation.h"
@@ -153,6 +156,15 @@ namespace input {
     button_state_e back_button_state;
   };
 
+  /// [fork] Touch from stock Moonlight for iOS's Touchscreen mode (fork/touch_emulation.h)
+  struct fork_touch_t {
+    touch_emulation::tracker_t tracker;
+    std::string device_name;
+    bool touched = false;  ///< A finger has become touch
+    thread_pool_util::ThreadPool::task_id_t expire_task {};  ///< Lifts a finger whose right release doesn't come
+    std::unique_ptr<fork_tweaks::tablet_posture::hold_t> posture;
+  };
+
   struct input_t {
     enum shortkey_e {
       CTRL = 0x1,  ///< Control key
@@ -194,6 +206,9 @@ namespace input {
 
     int32_t accumulated_vscroll_delta;
     int32_t accumulated_hscroll_delta;
+
+    /// [fork] Only for stock Moonlight for iOS (enable_touch_emulation())
+    std::unique_ptr<fork_touch_t> fork_touch;
   };
 
   /**
@@ -442,8 +457,15 @@ namespace input {
     }
   }
 
+  bool fork_touch_apply(std::shared_ptr<input_t> &input, const touch_emulation::steps_t &steps);
+
   void passthrough(std::shared_ptr<input_t> &input, PNV_REL_MOUSE_MOVE_PACKET packet) {
     if (!config::input.mouse) {
+      return;
+    }
+
+    // [fork] Relative motion: no finger in Moonlight for iOS's Touchscreen mode
+    if (input->fork_touch && !fork_touch_apply(input, input->fork_touch->tracker.pointer(std::chrono::steady_clock::now()))) {
       return;
     }
 
@@ -517,6 +539,101 @@ namespace input {
     return {multiply_polar_by_cartesian_scalar(major, angle, scalar), multiply_polar_by_cartesian_scalar(minor, angle + (M_PI / 2), scalar)};
   }
 
+  /**
+   * @brief [fork] Carries out what touch emulation made of a mouse event from stock Moonlight for iOS.
+   * @param input The input context.
+   * @param steps From the client's touch_emulation::tracker_t.
+   * @return Whether upstream's mouse handling should still have the event.
+   */
+  bool fork_touch_apply(std::shared_ptr<input_t> &input, const touch_emulation::steps_t &steps) {
+    using step_t = touch_emulation::step_t;
+    auto &fork_touch = *input->fork_touch;
+
+    bool pass = false;
+    bool touch_down = false;
+    for (const auto &step : steps) {
+      if (step.kind == step_t::pass) {
+        pass = true;
+        continue;
+      }
+
+      auto coords = client_to_touchport(input, {step.at.x * 65535.f, step.at.y * 65535.f}, {65535.f, 65535.f});
+      if (!coords) {
+        continue;
+      }
+
+      auto &touch_port = input->touch_port;
+      platf::touch_port_t abs_port {
+        touch_port.offset_x,
+        touch_port.offset_y,
+        touch_port.env_width,
+        touch_port.env_height
+      };
+
+      if (step.kind == step_t::mouse_move) {
+        platf::abs_mouse(platf_input, abs_port, coords->first, coords->second);
+        continue;
+      }
+
+      uint8_t event_type;
+      switch (step.kind) {
+        case step_t::touch_down:
+          event_type = LI_TOUCH_EVENT_DOWN;
+          touch_down = true;
+          break;
+        case step_t::touch_move:
+          event_type = LI_TOUCH_EVENT_MOVE;
+          break;
+        case step_t::touch_up:
+          event_type = LI_TOUCH_EVENT_UP;
+          break;
+        default:
+          event_type = LI_TOUCH_EVENT_CANCEL;
+          break;
+      }
+
+      // One finger, with Windows' default pressure and contact size
+      platf::touch_input_t touch {
+        event_type,
+        LI_ROT_UNKNOWN,
+        0,
+        coords->first / abs_port.width,
+        coords->second / abs_port.height,
+        0.0f,
+        0.0f,
+        0.0f,
+      };
+      platf::touch_update(input->client_context.get(), abs_port, touch);
+    }
+
+    // A finger's left release waits for the client's right button event; should it not come, the finger lifts then
+    task_pool.cancel(fork_touch.expire_task);
+    fork_touch.expire_task = nullptr;
+    if (auto deadline = fork_touch.tracker.deadline()) {
+      auto expire = [input, deadline = *deadline]() mutable {
+        input->fork_touch->expire_task = nullptr;
+        fork_touch_apply(input, input->fork_touch->tracker.expire(std::max(std::chrono::steady_clock::now(), deadline)));
+      };
+      auto wait = std::max(std::chrono::steady_clock::duration::zero(), *deadline - std::chrono::steady_clock::now());
+      fork_touch.expire_task = task_pool.pushDelayed(std::move(expire), wait).task_id;
+    }
+
+    if (touch_down && !fork_touch.touched) {
+      fork_touch.touched = true;
+      BOOST_LOG(info) << "fork: client ["sv << fork_touch.device_name << "] touches in Moonlight's Touchscreen mode; its fingers reach Windows as touch"sv;
+      if (fork_tweaks::ios_tablet_posture) {
+        fork_touch.posture = std::make_unique<fork_tweaks::tablet_posture::hold_t>(fork_touch.device_name);
+      }
+    }
+
+    return pass;
+  }
+
+  void enable_touch_emulation(std::shared_ptr<input_t> &input, const std::string &device_name) {
+    input->fork_touch = std::make_unique<fork_touch_t>();
+    input->fork_touch->device_name = device_name;
+  }
+
   void passthrough(std::shared_ptr<input_t> &input, PNV_ABS_MOUSE_MOVE_PACKET packet) {
     if (!config::input.mouse) {
       return;
@@ -539,6 +656,11 @@ namespace input {
 
     auto width = (float) util::endian::big(packet->width);
     auto height = (float) util::endian::big(packet->height);
+
+    // [fork] A finger in Moonlight for iOS's Touchscreen mode becomes touch
+    if (input->fork_touch && !fork_touch_apply(input, input->fork_touch->tracker.position({x / width, y / height}, std::chrono::steady_clock::now()))) {
+      return;
+    }
 
     auto tpcoords = client_to_touchport(input, {x, y}, {width, height});
     if (!tpcoords) {
@@ -563,6 +685,12 @@ namespace input {
 
     auto release = util::endian::little(packet->header.magic) == MOUSE_BUTTON_UP_EVENT_MAGIC_GEN5;
     auto button = util::endian::big(packet->button);
+
+    // [fork] A finger in Moonlight for iOS's Touchscreen mode becomes touch
+    if (input->fork_touch && !fork_touch_apply(input, input->fork_touch->tracker.button(button, !release, std::chrono::steady_clock::now()))) {
+      return;
+    }
+
     if (button > 0 && button < mouse_press.size()) {
       if (mouse_press[button] != release) {
         // button state is already what we want
@@ -785,6 +913,11 @@ namespace input {
       return;
     }
 
+    // [fork] Scrolling: no finger in Moonlight for iOS's Touchscreen mode
+    if (input->fork_touch && !fork_touch_apply(input, input->fork_touch->tracker.pointer(std::chrono::steady_clock::now()))) {
+      return;
+    }
+
     if (config::input.high_resolution_scrolling) {
       platf::scroll(platf_input, util::endian::big(packet->scrollAmt1));
     } else {
@@ -805,6 +938,11 @@ namespace input {
    */
   void passthrough(std::shared_ptr<input_t> &input, PSS_HSCROLL_PACKET packet) {
     if (!config::input.mouse) {
+      return;
+    }
+
+    // [fork] Scrolling: no finger in Moonlight for iOS's Touchscreen mode
+    if (input->fork_touch && !fork_touch_apply(input, input->fork_touch->tracker.pointer(std::chrono::steady_clock::now()))) {
       return;
     }
 
@@ -1662,6 +1800,22 @@ namespace input {
   void reset(std::shared_ptr<input_t> &input) {
     task_pool.cancel(key_press_repeat_id);
     task_pool.cancel(input->mouse_left_button_timeout);
+
+    // [fork] A finger still down is cancelled, the log says what the fingers did, and tablet posture is let go
+    if (input->fork_touch) {
+      task_pool.push([input]() mutable {
+        auto &fork_touch = *input->fork_touch;
+        task_pool.cancel(fork_touch.expire_task);
+        fork_touch.expire_task = nullptr;
+        fork_touch_apply(input, fork_touch.tracker.end());
+
+        auto &counts = fork_touch.tracker.counts();
+        BOOST_LOG(info) << "fork: Moonlight for iOS client ["sv << fork_touch.device_name << "]: "sv << counts.contacts
+                        << " fingers as touch, of them "sv << counts.long_presses << " long presses as right clicks; "sv
+                        << counts.mouse_clicks << " left clicks as mouse"sv;
+        fork_touch.posture.reset();
+      });
+    }
 
     // Ensure input is synchronous, by using the task_pool
     task_pool.push([]() {
