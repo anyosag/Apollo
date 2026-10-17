@@ -85,8 +85,14 @@ namespace proc {
 
   /**
    * @brief Waits up to about 3 s for Windows to accept display changes again.
+   * [fork] Returns false at once while the session is locked, which outlasts the wait: HDR is now
+   * set during the launch, so waiting would only make a launch on a locked PC 3 s slower.
    */
   static bool wait_for_display_settings() {
+    if (is_user_session_locked()) {
+      return false;
+    }
+
     auto retryInterval = 200ms;
     while (is_changing_settings_going_to_fail()) {
       if (retryInterval > 2s) {
@@ -323,6 +329,24 @@ namespace proc {
       auto stats = VDISPLAY::takeModeStats();
       BOOST_LOG(info) << "vdisplay: ready in "sv << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - launch_start).count()
                       << " ms after launch began, "sv << stats.mode_sets << " mode changes"sv;
+
+      // [fork] HDR is set here, before the encoder probe and the app start, so both find the display
+      // as the client will see it. It used to be set on a detached thread after the app had started,
+      // which read display_name while terminate() could clear it.
+      if (wait_for_display_settings()) {
+        // The display configuration above sets HDR to the client's request itself when dd_hdr_option
+        // is auto; Apollo's switches below don't count that one
+        auto displayW = platf::from_utf8(display_name);
+        bool configured_hdr = VDISPLAY::getDisplayHDRByName(displayW.c_str());
+        apply_virtual_display_hdr(display_name, launch_session->enable_hdr, true);
+
+        stats = VDISPLAY::takeModeStats();
+        BOOST_LOG(info) << "vdisplay: HDR set "sv << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - launch_start).count()
+                        << " ms after launch began, "sv << stats.hdr_changes << " HDR switches; the display configuration left HDR "sv
+                        << (configured_hdr ? "on"sv : "off"sv) << ", now "sv << (VDISPLAY::getDisplayHDRByName(displayW.c_str()) ? "on"sv : "off"sv);
+      } else {
+        BOOST_LOG(warning) << "vdisplay: Windows doesn't accept display changes now (a locked session?), HDR left as it is"sv;
+      }
     }
 
 #else
@@ -478,37 +502,6 @@ namespace proc {
 
     _app_launch_time = std::chrono::steady_clock::now();
 
-  #ifdef _WIN32
-    auto resetHDRThread = std::thread([this, enable_hdr = launch_session->enable_hdr, launch_start]{
-      // Windows doesn't seem to be able to set HDR correctly when a display is just connected / changed resolution,
-      // so we have tooggle HDR for the virtual display manually after a delay.
-      if (!wait_for_display_settings()) {
-        BOOST_LOG(warning) << "Restoring HDR settings failed due to retry timeout!";
-        return;
-      }
-
-      auto retryInterval = 200ms;
-      while (this->display_name.empty()) {
-        if (retryInterval > 2s) {
-          BOOST_LOG(warning) << "Not getting current display in time! HDR will not be toggled.";
-          return;
-        }
-        std::this_thread::sleep_for(retryInterval);
-        retryInterval *= 2;
-      }
-
-      // We should have got the actual streaming display by now
-      std::string currentDisplay = this->display_name;
-      apply_virtual_display_hdr(currentDisplay, enable_hdr, true);
-
-      auto stats = VDISPLAY::takeModeStats();
-      BOOST_LOG(info) << "vdisplay: HDR set "sv << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - launch_start).count()
-                      << " ms after launch began, "sv << stats.hdr_changes << " HDR switches"sv;
-    });
-
-    resetHDRThread.detach();
-  #endif
-
     fg.disable();
 
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
@@ -534,6 +527,18 @@ namespace proc {
     _vdisplay_desc = desc;
 
     BOOST_LOG(info) << "Virtual Display created at " << platf::to_utf8(vdisplayName);
+
+    // [fork] Capture, the encoder probe and the HDR state read find the display through DXGI, which
+    // may list it a little after it has a name. The HDR state it arrives with is what Windows saved
+    // for it, the end of its last stream.
+    auto listing_start = std::chrono::steady_clock::now();
+    if (VDISPLAY::waitForOutput(vdisplayName.c_str(), 2s)) {
+      BOOST_LOG(info) << "vdisplay: DXGI lists "sv << platf::to_utf8(vdisplayName) << " after "sv
+                      << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - listing_start).count()
+                      << " ms; it arrived with HDR "sv << (VDISPLAY::getDisplayHDRByName(vdisplayName.c_str()) ? "on"sv : "off"sv);
+    } else {
+      BOOST_LOG(warning) << "vdisplay: DXGI doesn't list "sv << platf::to_utf8(vdisplayName) << " after 2 s"sv;
+    }
 
     // The display usually arrives in its preferred mode, the stream's; Windows restores another
     // only for a display it has seen before

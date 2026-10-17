@@ -328,12 +328,13 @@ bool findDisplayIds(const wchar_t* displayName, LUID& adapterId, uint32_t& targe
 
 // [fork] Finds the display among every adapter's outputs. A virtual display's DXGI output belongs
 // to the GPU that renders it, not to the adapter CCD reports for it, so matching that adapter
-// never found it and HDR always read as off.
-bool getDisplayHDR(const wchar_t* displayName) {
+// never found it and HDR always read as off. A new factory each time: one lists the outputs
+// there were when it was made.
+static bool findOutput(const wchar_t* displayName, Microsoft::WRL::ComPtr<IDXGIOutput>& found) {
 	Microsoft::WRL::ComPtr<IDXGIFactory1> dxgiFactory;
 	HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory));
 	if (FAILED(hr)) {
-		BOOST_LOG(warning) << "vdisplay: CreateDXGIFactory1 failed in getDisplayHDR, hr=0x"sv << std::hex << hr;
+		BOOST_LOG(warning) << "vdisplay: CreateDXGIFactory1 failed, hr=0x"sv << std::hex << hr;
 		return false;
 	}
 
@@ -346,7 +347,7 @@ bool getDisplayHDR(const wchar_t* displayName) {
 			break; // No more adapters
 		}
 		if (FAILED(hr)) {
-			BOOST_LOG(warning) << "vdisplay: EnumAdapters1 failed for index "sv << adapterIdx << " in getDisplayHDR"sv;
+			BOOST_LOG(warning) << "vdisplay: EnumAdapters1 failed for index "sv << adapterIdx;
 			break;
 		}
 
@@ -363,31 +364,50 @@ bool getDisplayHDR(const wchar_t* displayName) {
 
 			DXGI_OUTPUT_DESC dxgiOutputDesc;
 			hr = dxgiOutput->GetDesc(&dxgiOutputDesc);
-			if (FAILED(hr) || displayName_view != dxgiOutputDesc.DeviceName) {
-				continue;
+			if (SUCCEEDED(hr) && displayName_view == dxgiOutputDesc.DeviceName) {
+				found = dxgiOutput;
+				return true;
 			}
-
-			// This is the correct output!
-			Microsoft::WRL::ComPtr<IDXGIOutput6> dxgiOutput6;
-			hr = dxgiOutput.As(&dxgiOutput6);
-			if (FAILED(hr) || !dxgiOutput6) {
-				BOOST_LOG(debug) << "vdisplay: no IDXGIOutput6 for "sv << narrow(displayName) << ", can't read its HDR state"sv;
-				return false;
-			}
-
-			DXGI_OUTPUT_DESC1 outputDesc1;
-			hr = dxgiOutput6->GetDesc1(&outputDesc1);
-			if (FAILED(hr)) {
-				BOOST_LOG(debug) << "vdisplay: GetDesc1 (output) failed for "sv << narrow(displayName);
-				return false;
-			}
-
-			return outputDesc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
 		}
 	}
 
-	BOOST_LOG(debug) << "vdisplay: "sv << narrow(displayName) << " not found among DXGI outputs"sv;
 	return false;
+}
+
+bool getDisplayHDR(const wchar_t* displayName) {
+	Microsoft::WRL::ComPtr<IDXGIOutput> dxgiOutput;
+	if (!findOutput(displayName, dxgiOutput)) {
+		BOOST_LOG(debug) << "vdisplay: "sv << narrow(displayName) << " not found among DXGI outputs"sv;
+		return false;
+	}
+
+	Microsoft::WRL::ComPtr<IDXGIOutput6> dxgiOutput6;
+	HRESULT hr = dxgiOutput.As(&dxgiOutput6);
+	if (FAILED(hr) || !dxgiOutput6) {
+		BOOST_LOG(debug) << "vdisplay: no IDXGIOutput6 for "sv << narrow(displayName) << ", can't read its HDR state"sv;
+		return false;
+	}
+
+	DXGI_OUTPUT_DESC1 outputDesc1;
+	hr = dxgiOutput6->GetDesc1(&outputDesc1);
+	if (FAILED(hr)) {
+		BOOST_LOG(debug) << "vdisplay: GetDesc1 (output) failed for "sv << narrow(displayName);
+		return false;
+	}
+
+	return outputDesc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+}
+
+bool waitForOutput(const wchar_t* displayName, std::chrono::milliseconds timeout) {
+	auto start = std::chrono::steady_clock::now();
+	Microsoft::WRL::ComPtr<IDXGIOutput> dxgiOutput;
+	while (!findOutput(displayName, dxgiOutput)) {
+		if (std::chrono::steady_clock::now() - start > timeout) {
+			return false;
+		}
+		Sleep(10);
+	}
+	return true;
 }
 
 bool setDisplayHDR(const LUID& adapterId, const uint32_t& targetId, bool enableAdvancedColor) {

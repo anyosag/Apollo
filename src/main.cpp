@@ -375,9 +375,13 @@ int main(int argc, char *argv[]) {
       // [fork] An 800x600 display at 60 Hz, described as SudoVDA's displays were
       luzvda_desc::guid_bytes_t guid_bytes;
       std::memcpy(guid_bytes.data(), probe_guid, guid_bytes.size());
-      VDISPLAY::createVirtualDisplay(luzvda_desc::display(client_display::describe(std::nullopt, {800, 600, 60000}), "Probe", guid_bytes));
+      auto probe_name = VDISPLAY::createVirtualDisplay(luzvda_desc::display(client_display::describe(std::nullopt, {800, 600, 60000}), "Probe", guid_bytes));
 
-      std::this_thread::sleep_for(500ms);
+      // [fork] Probe once DXGI lists the display, where the probe looks for it, rather than after a
+      // fixed 500 ms. A failed probe here isn't final: the first launch probes again.
+      if (probe_name.empty() || !VDISPLAY::waitForOutput(probe_name.c_str(), 2s)) {
+        BOOST_LOG(warning) << "vdisplay: the probe display isn't ready, probing anyway"sv;
+      }
 
       // Probe again anyways
       if (video::probe_encoders()) {

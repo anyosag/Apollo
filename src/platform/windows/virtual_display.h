@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <string>
 #include <vector>
@@ -21,6 +22,10 @@ namespace VDISPLAY {
 	LONG changeDisplaySettings2(const wchar_t* deviceName, int width, int height, int refresh_rate, bool bApplyIsolated=false);
 	bool getDisplayHDRByName(const wchar_t* displayName);
 	bool setDisplayHDRByName(const wchar_t* displayName, bool enableAdvancedColor);
+
+	// [fork] Waits until DXGI lists the display, where capture and the encoder probe look for it;
+	// false if it doesn't within the timeout
+	bool waitForOutput(const wchar_t* displayName, std::chrono::milliseconds timeout);
 
 	// [fork] The display's current size, and its refresh rate in millihertz
 	bool getDisplayMode(const wchar_t* deviceName, int& width, int& height, int& refresh_mhz);
