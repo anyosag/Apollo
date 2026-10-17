@@ -247,6 +247,8 @@
     "dd_wa_hdr_toggle_delay_desc_2": "If the value is set to 0, the workaround is disabled (default). If the value is between 0 and 3000 milliseconds, Apollo will turn off HDR, wait for the specified amount of time and then turn HDR on again. The recommended delay time is around 500 milliseconds in most cases.",
     "dd_wa_hdr_toggle_delay_desc_3": "DO NOT use this workaround unless you actually have issues with HDR as it directly impacts stream start time!",
     "dd_wa_hdr_toggle_delay": "High-contrast workaround for HDR",
+    "dd_wa_virtual_display_hdr_toggle": "Switch the virtual display's HDR off and on when a stream starts",
+    "dd_wa_virtual_display_hdr_toggle_desc": "A workaround for HDR colors that look wrong on a virtual display right after it appears. It costs two HDR switches, and a flash, at each stream start. When off, Apollo only sets HDR to what the client asked for.",
     "double_refreshrate": "Double refresh rate for Virtual Display",
     "double_refreshrate_desc": "Double the requested refresh rate when creating virtual displays, streamed refresh rate still remain the same. Can potentially improve stutter problem on some systems.",
     "ds4_back_as_touchpad_click": "Map Back/Select to Touchpad Click",

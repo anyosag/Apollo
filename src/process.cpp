@@ -580,6 +580,15 @@ namespace proc {
     if (config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic) {
       mode_changed_display = display;
 
+      if (!config::video.dd.wa.virtual_display_hdr_toggle) {
+        // [fork] Only set the state the client asked for, when it differs
+        if (hdr != enable_hdr) {
+          bool ok = VDISPLAY::setDisplayHDRByName(displayW.c_str(), enable_hdr);
+          BOOST_LOG(info) << "HDR "sv << (enable_hdr ? "enable"sv : "disable"sv) << (ok ? "d"sv : " failed"sv) << " for display "sv << display << ", without switching it off first"sv;
+        }
+        return;
+      }
+
       // Try turn off HDR whatever
       // As we always have to apply the workaround by turining off HDR first
       VDISPLAY::setDisplayHDRByName(displayW.c_str(), false);

@@ -1282,6 +1282,32 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### dd_wa_virtual_display_hdr_toggle
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            When a stream starts on a virtual display, or the display is made again, switch its HDR off and then
+            back on, rather than only setting it to the state the client asked for. A workaround for HDR colors that
+            look wrong right after a virtual display appears; it costs two HDR switches, and a flash, at each start.
+            @note{Applies to Windows only, with [dd_hdr_option](#dd_hdr_option) set to auto.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            dd_wa_virtual_display_hdr_toggle = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### dd_config_revert_delay
 
 <table>
