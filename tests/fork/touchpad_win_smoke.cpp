@@ -135,6 +135,17 @@ namespace {
     return (std::uint16_t) (from + (to - from) * step / steps);
   }
 
+  /**
+   * Puts the pointer in the middle of the main screen before a measured move. Every move goes
+   * right, so without this the pointer ends up against the screen's edge and stops counting.
+   * The pause also lets the clock pass the previous test's last time: a test's first injection
+   * failed with error 87 right after the "no time" test, whose times Windows set itself.
+   */
+  void center_pointer() {
+    SetCursorPos(GetSystemMetrics(SM_CXSCREEN) / 2, GetSystemMetrics(SM_CYSCREEN) / 2);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+
   /// One finger across the middle of the pad. Returns how far the pointer moved, in pixels.
   long one_finger_move(player_t &p, int steps = 25) {
     POINT before {};
@@ -265,6 +276,7 @@ int main(int argc, char **argv) {
 
   std::printf("One-finger moves, by timing:\n");
   for (timing_e t : {timing_e::tick_only, timing_e::none, timing_e::both}) {
+    center_pointer();
     player_t p(t);
     long moved = one_finger_move(p);
     report(name(t), p, moved);
@@ -276,6 +288,7 @@ int main(int argc, char **argv) {
   std::printf("Held fingers, then moved:\n");
   for (bool keepalive : {false, true}) {
     for (int hold : {500, 1200, 2500}) {
+      center_pointer();
       player_t p;
       long moved = held_then_moved(p, hold, keepalive);
       char what[64];
@@ -289,6 +302,7 @@ int main(int argc, char **argv) {
   }
 
   {
+    center_pointer();
     player_t p;
     std::printf("Gestures (watch the screen):\n");
     two_finger_scroll(p);
