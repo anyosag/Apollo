@@ -1,0 +1,12 @@
+{
+  "name": "apollo-fork-icons",
+  "private": true,
+  "description": "Renders Apollo's icons and app covers in LuzLunar's look",
+  "type": "commonjs",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "2.6.2"
+  }
+}
