@@ -766,6 +766,21 @@ bool removeVirtualDisplay(const GUID& guid) {
 	return true;
 }
 
+// [fork]
+std::wstring getVirtualDisplayName(const GUID& guid) {
+	if (LUZVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
+		return std::wstring();
+	}
+
+	LUID adapter {};
+	uint32_t targetId = 0;
+	std::wstring name;
+	if (!findListed(guid, adapter, targetId) || !displayNameFor(adapter, targetId, name)) {
+		return std::wstring();
+	}
+	return name;
+}
+
 int removeAllVirtualDisplays() {
 	if (LUZVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 		return 0;

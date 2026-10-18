@@ -43,6 +43,9 @@
 
   // [fork] The LuzVDA driver's requests
   #include "fork/luzvda_desc.h"
+  // [fork] The Virtual Display app's extended desktop
+  #include "fork/fork_config.h"
+  #include "fork/vdisplay_extend.h"
 
   // from_utf8() string conversion function
   #include "platform/windows/misc.h"
@@ -300,6 +303,16 @@ namespace proc {
           device_name = launch_session->device_name;
           device_uuid_str = launch_session->unique_id;
           device_uuid = uuid_util::uuid_t::parse(launch_session->unique_id);
+
+          // [fork] To Windows, the extended desktop's display is another one than the display this
+          // client streams other apps to (which may be the only one on), so it keeps a layout of its
+          // own: where the display goes next to the PC's
+          if (extends_desktop()) {
+            auto app_uuid = uuid_util::uuid_t::parse(_app.uuid);
+            device_uuid.b64[0] ^= app_uuid.b64[0];
+            device_uuid.b64[1] ^= app_uuid.b64[1];
+            device_uuid_str = device_uuid.string();
+          }
         }
 
         memcpy(&launch_session->display_guid, &device_uuid, sizeof(GUID));
@@ -319,7 +332,8 @@ namespace proc {
       }
     }
 
-    display_device::configure_display(config::video, *launch_session);
+    // [fork] The Virtual Display app keeps the PC's displays on
+    configure_launch_display(*launch_session);
 
     // We should not preserve display state when using virtual display.
     // It is already handled by Windows properly.
@@ -512,12 +526,37 @@ namespace proc {
   }
 
 #ifdef _WIN32
+  // [fork] The Virtual Display app adds the client's screen next to the PC's displays (Desktop and
+  // the other apps keep the configured display configuration, e.g. this display only)
+  bool proc_t::extends_desktop() const {
+    return _app.uuid == VIRTUAL_DISPLAY_UUID && fork_tweaks::virtual_display_app_extends;
+  }
+
+  // [fork] Applies the launch's display configuration. An extended desktop leaves the other
+  // displays on and the primary display where it is, and with no virtual display to configure
+  // leaves the displays alone: display_device would otherwise configure the primary one.
+  void proc_t::configure_launch_display(const rtsp_stream::launch_session_t &session) {
+    if (!extends_desktop()) {
+      display_device::configure_display(config::video, session);
+    } else if (virtual_display && !config::video.output_name.empty()) {
+      display_device::configure_display(fork_tweaks::vdisplay_extend::display_config(config::video), session);
+    } else {
+      BOOST_LOG(warning) << "vdisplay: no virtual display to extend the desktop with, the displays are left as they are"sv;
+    }
+  }
+
   // [fork] Creates the virtual display, describing the client's screen when it sent one, sets its
   // mode and, if configured, the isolated layout, and makes it the display Apollo captures
   bool proc_t::setup_virtual_display(const vdisplay_mode::display_mode_t &mode, const std::optional<client_display::screen_t> &screen, const GUID &guid, bool apply_mode) {
     luzvda_desc::guid_bytes_t guid_bytes;
     std::memcpy(guid_bytes.data(), &guid, guid_bytes.size());
     auto desc = luzvda_desc::display(client_display::describe(screen, mode), _vdisplay_client_name, guid_bytes);
+
+    // [fork] The displays on before the virtual display arrives stay on, for the Virtual Display app
+    std::optional<fork_tweaks::vdisplay_extend::snapshot_t> extend_from;
+    if (extends_desktop()) {
+      extend_from = fork_tweaks::vdisplay_extend::snapshot();
+    }
 
     std::wstring vdisplayName = VDISPLAY::createVirtualDisplay(desc);
     if (vdisplayName.empty()) {
@@ -540,6 +579,19 @@ namespace proc {
       BOOST_LOG(warning) << "vdisplay: DXGI doesn't list "sv << platf::to_utf8(vdisplayName) << " after 2 s"sv;
     }
 
+    // [fork] Windows may have switched the PC's displays off, applying the layout it saved for this
+    // set of displays when a stream left only the virtual display on
+    if (extend_from) {
+      fork_tweaks::vdisplay_extend::restore(*extend_from, display_device::map_display_name(platf::to_utf8(vdisplayName)));
+
+      // Changing which displays are on can give the virtual display another name
+      auto renamed = VDISPLAY::getVirtualDisplayName(guid);
+      if (!renamed.empty() && renamed != vdisplayName) {
+        BOOST_LOG(info) << "vdisplay: "sv << platf::to_utf8(vdisplayName) << " is now "sv << platf::to_utf8(renamed);
+        vdisplayName = renamed;
+      }
+    }
+
     // The display usually arrives in its preferred mode, the stream's; Windows restores another
     // only for a display it has seen before
     if (apply_mode) {
@@ -552,7 +604,8 @@ namespace proc {
     }
 
     // Check the ISOLATED DISPLAY configuration setting and rearrange the displays
-    if (config::video.isolated_virtual_display_option == true) {
+    // [fork] Not for an extended desktop, which the mouse is meant to cross into
+    if (config::video.isolated_virtual_display_option == true && !extend_from) {
       // Apply the isolated display settings
       VDISPLAY::changeDisplaySettings2(vdisplayName.c_str(), mode.width, mode.height, mode.refresh_mhz, true);
     }
@@ -659,7 +712,7 @@ namespace proc {
       _launch_session->height = want.height;
       _launch_session->fps = session.fps;
       _launch_session->enable_hdr = session.enable_hdr;
-      display_device::configure_display(config::video, *_launch_session);
+      configure_launch_display(*_launch_session);
       display_device::reset_persistence();
       return vdisplay_change_e::replugged;
     };
