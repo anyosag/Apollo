@@ -146,8 +146,9 @@ jobs:
             tests/fork/clipboard_win_smoke.cpp src/fork/clipboard_win.cpp src/fork/clipbundle.cpp \
             -lz -lole32 -luser32 -o clipboard_win_smoke
           ./clipboard_win_smoke
-          # A real synthetic touchpad playing trackpad passthrough's gestures; skips where Windows has none
-          g++ -std=c++17 -Wall -Isrc/fork tests/fork/touchpad_win_smoke.cpp -luser32 -o touchpad_win_smoke
+          # A real synthetic touchpad playing trackpad passthrough's gestures; skips where Windows has none.
+          # Static, so the uploaded copy runs on a PC without MSYS2.
+          g++ -std=c++17 -Wall -static -Isrc/fork tests/fork/touchpad_win_smoke.cpp -luser32 -o touchpad_win_smoke
           ./touchpad_win_smoke
           # Header-only fork code; each test is a program of its own
           for test in tests/fork/header/*_test.cpp; do
@@ -221,3 +222,11 @@ jobs:
           name: Apollo-windows-${{ env.BUILD_VERSION }}
           path: artifacts/
           if-no-files-found: error
+
+      # The touchpad smoke test from the fork unit test step, to run by hand on a PC (see FORK.md)
+      - name: Upload the touchpad smoke test
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        with:
+          name: Apollo-touchpad-smoke-${{ env.BUILD_VERSION }}
+          path: touchpad_win_smoke.exe
+          if-no-files-found: warn
