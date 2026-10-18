@@ -82,8 +82,8 @@ namespace fork_touchpad::win {
 
   /**
    * One touchpad contact for InjectSyntheticPointerInput. Microsoft's touchpad sample sets dwTime
-   * and leaves PerformanceCount at zero; @p performance_count is there for the smoke test's
-   * timing variants.
+   * and leaves PerformanceCount at zero. Setting both fails every injection with error 87 (on
+   * Windows 11 25H2); @p performance_count is there for the smoke test's timing variants.
    */
   inline POINTER_TYPE_INFO touchpad_contact(UINT32 pointer_id, POINTER_FLAGS flags, int button_change, LONG x, LONG y, DWORD time, UINT64 performance_count = 0) {
     POINTER_TYPE_INFO p {};

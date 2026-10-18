@@ -4,8 +4,9 @@
  * LuzLunar's frames (luztouchpad.h) through fork_touchpad::host_t (touchpad.h).
  *
  * The device is made with a client's first frame and removed with its session. While fingers
- * are held, a timer re-injects them if the client goes quiet (Windows drops held contacts after
- * about a second) and lifts them once it has been gone for 1.5 s.
+ * are held, a timer re-injects them if the client goes quiet (Windows drops a contact that isn't
+ * injected again within about half a second, and the finger's next move then starts over as a
+ * new contact, losing part of it) and lifts them once it has been gone for 1.5 s.
  */
 #pragma once
 
