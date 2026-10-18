@@ -24,7 +24,7 @@ It stays a drop-in Apollo: stock Moonlight clients work as before, and every for
 
 ## Keeping upstream merges clean
 
-Fork code lives in new files: `src/fork/`, `tests/fork/`, `.github/workflows/` and this file. Upstream files only get the small hooks below. Most are calls into `fork_tweaks::`; the rest are marked `[fork]`, so `git grep -e fork_tweaks -e "\[fork\]"` finds them all. If a sync fails with a conflict, merge upstream manually, keep upstream's change and re-apply the hook.
+Fork code lives in new files: `src/fork/`, `tests/fork/`, `scripts/fork/`, `.github/workflows/` and this file. Upstream files only get the small hooks below. Most are calls into `fork_tweaks::`; the rest are marked `[fork]`, so `git grep -e fork_tweaks -e "\[fork\]"` finds them all. If a sync fails with a conflict, merge upstream manually, keep upstream's change and re-apply the hook.
 
 | Upstream file | Hook |
 |---|---|
@@ -45,6 +45,16 @@ Fork code lives in new files: `src/fork/`, `tests/fork/`, `.github/workflows/` a
 | `cmake/packaging/windows.cmake`, `windows_nsis.cmake` | The driver component and the install and uninstall commands are LuzVDA's |
 | `src_assets/common/assets/web/configs/tabs/AudioVideo.vue`, `locale/en.json` | The driver status and hints name LuzVDA |
 | `tests/CMakeLists.txt` | `tests/fork/` excluded from upstream's test glob |
+
+### Replaced images
+
+The icons and app covers are replaced wholesale with the LuzLunar look (see [Fork features](#fork-features)), keeping upstream's file names and sizes so nothing that references them changes:
+
+- `apollo.svg`, `apollo.png`, `apollo.ico`, `apollo.icns`
+- `src_assets/common/assets/web/public/images/`: `apollo.ico`, `logo-apollo.svg`, `logo-apollo-16.png`, `logo-apollo-45.png`, and `apollo-playing`, `apollo-pausing`, `apollo-locked` as `.svg`, `.png`, `.ico`, `-16.png` and `-45.png`
+- `src_assets/common/assets/`: `desktop.png`, `desktop-alt.png`, `virtual_desktop.png`, `steam.png`, `input_only.png`, `terminate.png`, `template.png`
+
+If a sync conflicts on one of them, keep ours. If upstream adds an image, draw it in `scripts/fork/icons/` too. `box.png` stays upstream's: Moonlight clients treat a 130×180 image as "no box art" and draw their own placeholder with the app name.
 
 ### Upstream fixes carried by the fork
 
@@ -138,6 +148,11 @@ In `sunshine.conf`. `apply_config()` reads them and removes them from the option
   - A launch sets the virtual display's HDR before the encoder probe and the app start, so a game starts on the display as the client will see it. Upstream set it on a detached thread after the app had started, which read the display's name while `terminate()` could clear it, and for a physical display only logged a warning 3 s later.
   - When it arrives, the display is waited for (up to 2 s) until DXGI lists it, where capture, the encoder probe and the HDR state read look for it. Log: `vdisplay: DXGI lists <display> after <n> ms; it arrived with HDR <on|off>`, the state Windows saved for it. The startup encoder probe waits the same way instead of a fixed 500 ms.
   - Waiting for Windows to accept display changes (before setting HDR) gives up at once while the session is locked, instead of after about 3 s.
+- **LuzLunar look** (`scripts/fork/icons/`):
+  - Apollo's icon is the daytime partner of LuzLunar's: a cream sun disc (LuzLunar's moon color, `#F4EBD0`) ringed by white rays drawn with LuzLunar's sparkle curve, on the same indigo tile (`#34419A` to `#18205A`, around LuzLunar's `#1F296B`). Its eight rays keep the outline of upstream's eight-point star.
+  - The tray icons keep the sun and color its disc by state, each with its own glyph: green ▶ playing, blue ‖ paused, orange padlock when a PIN is needed. Each size has its own layout: four rays and a bigger disc at 24 px and below, glyphs on the pixel grid at 16 px, and the app icon's inset tile above 48 px.
+  - The built-in apps' covers share one indigo night sky with LuzLunar sparkles, a cream line glyph and a Segoe UI Semibold label. Steam's cover shows a game controller rather than Valve's logo.
+  - Everything is drawn in code (`icons.js`, `covers.js`). To change it, edit those and run `npm install` and `npm run build` in `scripts/fork/icons/` on Windows; `build.js` rewrites every file listed under [Replaced images](#replaced-images), including the `.ico` sizes `scripts/icons/convert_and_pack.sh` packs and the `.icns`. Set `APOLLO_COVER_FONT` to Segoe UI Semibold's path if it isn't `C:/Windows/Fonts/seguisb.ttf`.
 
 ## Tests
 
