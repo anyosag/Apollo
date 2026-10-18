@@ -96,7 +96,7 @@ namespace fork_touchpad {
     HSYNTHETICPOINTERDEVICE device = nullptr;
     bool unsupported = false;  ///< Windows wouldn't make the device, so this client's frames are dropped
     thread_pool_util::ThreadPool::task_id_t timer = nullptr;
-    POINTER_TYPE_INFO info[luztouchpad::k_max_contacts] {};
+    POINTER_TYPE_INFO contacts[luztouchpad::k_max_contacts] {};  // Not "info": BOOST_LOG(info) would find it
     HDESK last_desktop = nullptr;
     std::uint32_t logged_adopted = 0;
     std::int64_t last_failure_log_us = -failure_log_interval_us;
@@ -122,17 +122,17 @@ namespace fork_touchpad {
       DWORD time = host_clock().tick_ms(injection.time_us);
       for (std::size_t i = 0; i < injection.count; i++) {
         const auto &e = injection.entries[i];
-        s.info[i] = win::touchpad_contact(e.pointer_id, e.flags, (int) e.button_change, e.x, e.y, time);
+        s.contacts[i] = win::touchpad_contact(e.pointer_id, e.flags, (int) e.button_change, e.x, e.y, time);
       }
 
       auto &api = win::api();
-      if (api.inject(s.device, s.info, (UINT32) injection.count)) {
+      if (api.inject(s.device, s.contacts, (UINT32) injection.count)) {
         return true;
       }
       HDESK desktop = platf::syncThreadDesktop();
       if (desktop != s.last_desktop) {
         s.last_desktop = desktop;
-        return api.inject(s.device, s.info, (UINT32) injection.count);
+        return api.inject(s.device, s.contacts, (UINT32) injection.count);
       }
       return false;
     }
