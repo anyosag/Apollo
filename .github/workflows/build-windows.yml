@@ -128,8 +128,9 @@ jobs:
             mingw-w64-ucrt-x86_64-toolchain
             mingw-w64-ucrt-x86_64-zlib
 
-      # Fork code that doesn't need the rest of Apollo: the clipboard bundle (shared with LuzLunar)
-      # and a round trip through the real Windows clipboard, which skips if the runner has none.
+      # Fork code that doesn't need the rest of Apollo: the clipboard bundle and trackpad frames
+      # (shared with LuzLunar), a round trip through the real Windows clipboard, and gestures on a
+      # real synthetic touchpad; the last two skip if the runner has no clipboard or touchpads.
       - name: Fork unit tests
         shell: msys2 {0}
         run: |
@@ -138,10 +139,16 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -DCLIPBUNDLE_WITH_ZLIB -Isrc/fork \
             tests/fork/clipbundle_test.cpp src/fork/clipbundle.cpp -lz -o clipbundle_test
           ./clipbundle_test
+          # Trackpad passthrough frames, also shared with LuzLunar (the same test runs in its CI)
+          g++ -std=c++17 -Wall -Wextra -Isrc/fork tests/fork/luztouchpad_test.cpp -o luztouchpad_test
+          ./luztouchpad_test
           g++ -std=c++17 -Wall -DCLIPBUNDLE_WITH_ZLIB -Isrc/fork \
             tests/fork/clipboard_win_smoke.cpp src/fork/clipboard_win.cpp src/fork/clipbundle.cpp \
             -lz -lole32 -luser32 -o clipboard_win_smoke
           ./clipboard_win_smoke
+          # A real synthetic touchpad playing trackpad passthrough's gestures; skips where Windows has none
+          g++ -std=c++17 -Wall -Isrc/fork tests/fork/touchpad_win_smoke.cpp -luser32 -o touchpad_win_smoke
+          ./touchpad_win_smoke
           # Header-only fork code; each test is a program of its own
           for test in tests/fork/header/*_test.cpp; do
             name=$(basename "$test" .cpp)

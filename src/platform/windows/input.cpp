@@ -22,6 +22,10 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 
+// [fork] trackpad passthrough
+#include "src/fork/fork_config.h"
+#include "src/fork/touchpad_win.h"
+
 #ifdef __MINGW32__
 // DECLARE_HANDLE(HSYNTHETICPOINTERDEVICE);
 WINUSERAPI HSYNTHETICPOINTERDEVICE WINAPI CreateSyntheticPointerDevice(POINTER_INPUT_TYPE pointerType, ULONG maxCount, POINTER_FEEDBACK_MODE mode);
@@ -696,6 +700,9 @@ namespace platf {
     POINTER_TYPE_INFO touchInfo[10] {};
     UINT32 activeTouchSlots {};
     thread_pool_util::ThreadPool::task_id_t touchRepeatTask {};
+
+    // [fork] LuzLunar's trackpad passthrough: this client's synthetic touchpad (src/fork/touchpad_win.*)
+    std::shared_ptr<fork_touchpad::session_t> touchpad;
   };
 
   /**
@@ -705,6 +712,22 @@ namespace platf {
    */
   std::unique_ptr<client_input_t> allocate_client_input_context(input_t &input) {
     return std::make_unique<client_input_raw_t>(input);
+  }
+
+  // [fork] Trackpad passthrough, next to the client's other synthetic devices
+  void touchpad_frame(client_input_t *input, const luztouchpad::frame &frame) {
+    auto raw = (client_input_raw_t *) input;
+    if (!raw->touchpad) {
+      raw->touchpad = fork_touchpad::make_session();
+    }
+    fork_touchpad::frame(raw->touchpad, frame);
+  }
+
+  void touchpad_cancel(client_input_t *input) {
+    auto raw = (client_input_raw_t *) input;
+    if (raw->touchpad) {
+      fork_touchpad::cancel(raw->touchpad);
+    }
   }
 
   /**
@@ -1775,6 +1798,11 @@ namespace platf {
       }
     } else {
       BOOST_LOG(warning) << "Touch input requires Windows 10 1809 or later"sv;
+    }
+
+    // [fork] LuzLunar's trackpad passthrough, when Windows makes synthetic touchpads (src/fork/touchpad_win.*)
+    if (config::input.mouse && fork_tweaks::touchpad_passthrough && fork_touchpad::available()) {
+      caps |= luztouchpad::k_host_feature_flag;
     }
 
     return caps;

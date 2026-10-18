@@ -19,6 +19,10 @@ namespace fork_tweaks {
   /// addresses `origin_web_ui_allowed` allows), not only from this PC.
   inline bool web_ui_remote_first_setup = false;
 
+  /// `fork_touchpad_passthrough`: offer LuzLunar's trackpad passthrough, a synthetic Windows touchpad
+  /// fed with the Mac trackpad's fingers (src/fork/touchpad_win.*). Off, the trackpad stays a mouse.
+  inline bool touchpad_passthrough = true;
+
   /**
    * @brief Read the fork-only options and remove them from @p vars, so they aren't reported as unrecognized.
    * @param vars The parsed sunshine.conf options.
