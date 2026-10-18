@@ -106,6 +106,22 @@ int main() {
   CHECK(has_format(image, "PNG"));
   CHECK(has_format(image, "CF_DIBV5"));
 
+  // Bytes that aren't the declared format aren't written, or decoded into a bitmap
+  std::string bmp = "BM" + std::string(60, '\0');
+  CHECK(write({{"image/png", bmp}, {"text/plain", "caption"}}, false) != 0);
+  snapshot mislabeled;
+  CHECK(read(mislabeled));
+  CHECK(!has_format(mislabeled, "PNG"));
+  CHECK(!has_format(mislabeled, "CF_DIBV5"));
+  CHECK(find(mislabeled, "text/plain") != nullptr);
+
+  // A repeated type keeps the first item
+  CHECK(write({{"text/plain", "first"}, {"text/plain", "second"}}, false) != 0);
+  snapshot repeated;
+  CHECK(read(repeated));
+  const clipbundle::item *first = find(repeated, "text/plain");
+  CHECK(first != nullptr && first->data == "first");
+
   // A bitmap-only copy (like Print Screen) arrives as PNG, opaque even though alpha is 0
   std::string dib(40 + 8, '\0');
   dib[0] = 40;

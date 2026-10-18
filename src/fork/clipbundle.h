@@ -73,6 +73,8 @@ namespace clipbundle {
   bool is_text_type(std::string_view type);  ///< text/plain, text/rtf, text/html
   bool is_image_type(std::string_view type);  ///< image/*
   bool is_office_type(std::string_view type);  ///< ms/*
+  /** False for an image whose bytes don't start with its type's signature, so a paste can't be handed another format */
+  bool data_matches_type(std::string_view type, std::string_view data);
 
   std::string to_lf(std::string_view text);  ///< CRLF and lone CR to LF
   std::string to_crlf(std::string_view text);  ///< LF to CRLF
@@ -85,6 +87,10 @@ namespace clipbundle {
 
   /** True if the HTML has images pointing at local files (Word's temp copies), which can't cross machines */
   bool html_has_local_file_images(std::string_view html);
+  /** True if the HTML shows no text: only tags (like a lone <img>), comments, styles, scripts and whitespace */
+  bool html_visible_text_empty(std::string_view html);
+  /** True if plain text carries nothing of its own beside a picture: empty, whitespace, or a single URL */
+  bool picture_only_text(std::string_view text);
   /** Adds <meta charset="utf-8"> unless the document declares a charset */
   std::string ensure_utf8_meta(std::string_view html);
 
@@ -101,14 +107,18 @@ namespace clipbundle {
   };
 
   /**
-   * Rule R3: include an image only if there's no text, or the source app offered an image before its
-   * text (a picture copy). An Excel range has text first and a rendered bitmap later, which isn't sent.
+   * Rule R3: include an image only for a picture copy. That is: there's no text, the source app offered
+   * an image before its text, or the text carries nothing of its own (plain text that's empty or a lone
+   * URL, and HTML that's empty or shows no text, like a browser's "Copy image" with its <img> tag first).
+   * An Excel range has real text first and a rendered bitmap later, which isn't sent.
+   * plain_text is the copy's plain text and html its HTML document (empty when not offered).
    */
-  bool include_image(const std::vector<kind> &source_order);
+  bool include_image(const std::vector<kind> &source_order, std::string_view plain_text, std::string_view html);
 
   /**
    * Orders items for sending and writing: Office formats, then images and RTF/HTML (images first for a
-   * picture copy), then plain text, keeping the source's order within each group. Applies rule R4.
+   * picture copy), then plain text, keeping the source's order within each group. Applies rules R4 and
+   * R6 (a picture copy with an image drops HTML that shows no text: it only points at the picture's URL).
    */
   void prepare_for_send(std::vector<item> &items, bool image_first);
 

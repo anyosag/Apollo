@@ -24,6 +24,7 @@ namespace clipbundle {
     constexpr std::uint8_t k_enc_raw = 0;
     constexpr std::uint8_t k_enc_zlib = 1;
     constexpr std::size_t k_min_compress = 1024;
+    constexpr std::uint64_t k_max_zlib_ratio = 1032;  ///< Deflate can't expand data more than this
 
     const char *const k_start_fragment = "<!--StartFragment-->";
     const char *const k_end_fragment = "<!--EndFragment-->";
@@ -195,6 +196,19 @@ namespace clipbundle {
       return std::string_view::npos;
     }
 
+    bool is_space(char c) {
+      return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v';
+    }
+
+    // True if lower (lowercased HTML) has the tag <name at pos, like "<head>" but not "<header>"
+    bool starts_tag(std::string_view lower, std::size_t pos, std::string_view name) {
+      if (pos + 1 + name.size() > lower.size() || lower[pos] != '<' || lower.substr(pos + 1, name.size()) != name) {
+        return false;
+      }
+      std::size_t after = pos + 1 + name.size();
+      return after == lower.size() || lower[after] == '>' || lower[after] == '/' || is_space(lower[after]);
+    }
+
     int group_of(std::string_view type, bool image_first) {
       if (is_office_type(type)) {
         return 0;
@@ -306,6 +320,10 @@ namespace clipbundle {
         it.data = std::string(stored);
       } else if (encoding == k_enc_zlib) {
 #ifdef CLIPBUNDLE_WITH_ZLIB
+        // A raw size the stored bytes can't inflate to would allocate memory for nothing
+        if (raw_size > stored_size * k_max_zlib_ratio) {
+          return fail(error, "bad compressed item");
+        }
         it.data.resize(raw_size);
         uLongf size = raw_size;
         int status = uncompress(reinterpret_cast<Bytef *>(raw_size > 0 ? &it.data[0] : nullptr), &size, reinterpret_cast<const Bytef *>(stored.data()), static_cast<uLong>(stored.size()));
@@ -438,6 +456,16 @@ namespace clipbundle {
     return type.substr(0, 3) == "ms/";
   }
 
+  bool data_matches_type(std::string_view type, std::string_view data) {
+    if (type == "image/png") {
+      return data.substr(0, 8) == std::string_view("\x89PNG\r\n\x1a\n", 8);
+    }
+    if (type == "image/jpeg") {
+      return data.substr(0, 3) == std::string_view("\xFF\xD8\xFF", 3);
+    }
+    return !is_image_type(type);
+  }
+
   std::string to_lf(std::string_view text) {
     std::string out;
     out.reserve(text.size());
@@ -563,6 +591,94 @@ namespace clipbundle {
     return false;
   }
 
+  bool html_visible_text_empty(std::string_view html) {
+    std::string lower = lowercase(html);
+    std::string_view text(lower);
+    std::size_t i = 0;
+    while (i < text.size()) {
+      if (text.compare(i, 4, "<!--") == 0) {
+        std::size_t end = text.find("-->", i + 4);
+        i = end == std::string_view::npos ? text.size() : end + 3;
+        continue;
+      }
+
+      // Elements whose content isn't shown
+      bool skipped = false;
+      for (const char *element : {"head", "title", "style", "script"}) {
+        if (starts_tag(text, i, element)) {
+          std::size_t end = text.find(std::string("</") + element, i);
+          std::size_t close = end == std::string_view::npos ? end : text.find('>', end);
+          i = close == std::string_view::npos ? text.size() : close + 1;
+          skipped = true;
+          break;
+        }
+      }
+      if (skipped) {
+        continue;
+      }
+
+      unsigned char c = static_cast<unsigned char>(text[i]);
+      if (c == '<') {
+        std::size_t end = text.find('>', i);
+        i = end == std::string_view::npos ? text.size() : end + 1;
+        continue;
+      }
+      if (c == '&') {
+        bool space = false;
+        for (const char *entity : {"&nbsp;", "&#160;", "&#xa0;", "&#32;", "&#x20;"}) {
+          if (text.compare(i, std::strlen(entity), entity) == 0) {
+            i += std::strlen(entity);
+            space = true;
+            break;
+          }
+        }
+        if (space) {
+          continue;
+        }
+        return false;
+      }
+      if (is_space(text[i])) {
+        i++;
+        continue;
+      }
+      if (c == 0xC2 && i + 1 < text.size() && static_cast<unsigned char>(text[i + 1]) == 0xA0) {
+        i += 2;  // UTF-8 no-break space
+        continue;
+      }
+      if (c == 0xEF && i + 2 < text.size() && static_cast<unsigned char>(text[i + 1]) == 0xBB && static_cast<unsigned char>(text[i + 2]) == 0xBF) {
+        i += 3;  // byte order mark
+        continue;
+      }
+      return false;
+    }
+    return true;
+  }
+
+  bool picture_only_text(std::string_view text) {
+    std::size_t begin = 0, end = text.size();
+    while (begin < end && is_space(text[begin])) {
+      begin++;
+    }
+    while (end > begin && is_space(text[end - 1])) {
+      end--;
+    }
+    std::string_view trimmed = text.substr(begin, end - begin);
+    if (trimmed.empty()) {
+      return true;
+    }
+    if (std::any_of(trimmed.begin(), trimmed.end(), is_space)) {
+      return false;
+    }
+    // A browser's "Copy image" may offer the picture's address as text
+    std::string scheme = lowercase(trimmed.substr(0, 8));
+    for (const char *prefix : {"http://", "https://", "data:", "file:", "blob:"}) {
+      if (scheme.compare(0, std::strlen(prefix), prefix) == 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   std::string ensure_utf8_meta(std::string_view html) {
     std::size_t head_limit = find_ci(html, "<body");
     std::string_view head = html.substr(0, head_limit == std::string_view::npos ? std::min<std::size_t>(html.size(), 4096) : head_limit);
@@ -660,13 +776,15 @@ namespace clipbundle {
     return bmp;
   }
 
-  bool include_image(const std::vector<kind> &source_order) {
+  bool include_image(const std::vector<kind> &source_order, std::string_view plain_text, std::string_view html) {
     for (kind k : source_order) {
       if (k == kind::image) {
         return true;
       }
       if (k == kind::text) {
-        return false;
+        // Text first: still a picture copy if the text has nothing of its own, like a browser's
+        // "Copy image", which offers <img src="..."> as HTML (and maybe the URL as text) before the picture
+        return picture_only_text(plain_text) && (html.empty() || html_visible_text_empty(html));
       }
     }
     return true;  // no text at all
@@ -680,6 +798,18 @@ namespace clipbundle {
     if (has_rtf) {
       items.erase(std::remove_if(items.begin(), items.end(), [](const item &it) {
                     return it.type == "text/html" && html_has_local_file_images(it.data);
+                  }),
+                  items.end());
+    }
+
+    // R6: a picture copy's HTML that shows no text only points at the picture (often a URL the other
+    // machine can't load), so the picture itself is pasted instead
+    bool has_image = std::any_of(items.begin(), items.end(), [](const item &it) {
+      return is_image_type(it.type);
+    });
+    if (image_first && has_image) {
+      items.erase(std::remove_if(items.begin(), items.end(), [](const item &it) {
+                    return it.type == "text/html" && html_visible_text_empty(it.data);
                   }),
                   items.end());
     }

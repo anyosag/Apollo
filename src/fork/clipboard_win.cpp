@@ -182,10 +182,32 @@ namespace fork_tweaks::clipboard_win {
       return factory.get();
     }
 
-    // Decodes an image (BMP, PNG, JPEG) to straight BGRA
-    bool decode_image(const std::string &encoded, pixels_bgra &out) {
+    // The container an image's first bytes announce, if it's one decode_image accepts
+    const GUID *container_of(const std::string &encoded) {
+      static constexpr unsigned char png[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+      static constexpr unsigned char jpeg[] = {0xFF, 0xD8, 0xFF};
+      auto starts_with = [&encoded](const unsigned char *magic, std::size_t size) {
+        return encoded.size() >= size && std::memcmp(encoded.data(), magic, size) == 0;
+      };
+      if (starts_with(png, sizeof(png))) {
+        return &GUID_ContainerFormatPng;
+      }
+      if (starts_with(jpeg, sizeof(jpeg))) {
+        return &GUID_ContainerFormatJpeg;
+      }
+      if (encoded.size() >= 2 && encoded[0] == 'B' && encoded[1] == 'M') {
+        return &GUID_ContainerFormatBmp;
+      }
+      return nullptr;
+    }
+
+    // Decodes a BMP, PNG or JPEG to straight BGRA. The bytes must be the format the caller expects, and
+    // only Windows' own decoder for it is used: images come from the client, and WIC would otherwise
+    // try every installed codec.
+    bool decode_image(const std::string &encoded, const GUID &container, pixels_bgra &out) {
       IWICImagingFactory *factory = wic();
-      if (factory == nullptr) {
+      const GUID *announced = container_of(encoded);
+      if (factory == nullptr || announced == nullptr || !IsEqualGUID(*announced, container)) {
         return false;
       }
 
@@ -195,7 +217,8 @@ namespace fork_tweaks::clipboard_win {
       com_ptr<IWICFormatConverter> converter;
       if (FAILED(factory->CreateStream(stream.put())) ||
           FAILED(stream->InitializeFromMemory(reinterpret_cast<BYTE *>(const_cast<char *>(encoded.data())), DWORD(encoded.size()))) ||
-          FAILED(factory->CreateDecoderFromStream(stream.get(), nullptr, WICDecodeMetadataCacheOnLoad, decoder.put())) ||
+          FAILED(factory->CreateDecoder(container, &GUID_VendorMicrosoft, decoder.put())) ||
+          FAILED(decoder->Initialize(stream.get(), WICDecodeMetadataCacheOnDemand)) ||
           FAILED(decoder->GetFrame(0, frame.put())) ||
           FAILED(factory->CreateFormatConverter(converter.put())) ||
           FAILED(converter->Initialize(frame.get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom)) ||
@@ -255,7 +278,7 @@ namespace fork_tweaks::clipboard_win {
     std::string dib_to_png(const std::string &dib) {
       std::string bmp = clipbundle::dib_to_bmp(dib);
       pixels_bgra image;
-      if (bmp.empty() || !decode_image(bmp, image)) {
+      if (bmp.empty() || !decode_image(bmp, GUID_ContainerFormatBmp, image)) {
         return {};
       }
 
@@ -276,9 +299,9 @@ namespace fork_tweaks::clipboard_win {
     }
 
     // A PNG or JPEG as CF_DIBV5 (32-bit with alpha, sRGB), for apps that only paste bitmaps
-    std::string image_to_dibv5(const std::string &encoded) {
+    std::string image_to_dibv5(const std::string &encoded, const GUID &container) {
       pixels_bgra image;
-      if (!decode_image(encoded, image)) {
+      if (!decode_image(encoded, container, image)) {
         return {};
       }
 
@@ -357,19 +380,11 @@ namespace fork_tweaks::clipboard_win {
     }
 
     std::vector<clipbundle::kind> kinds;
-    std::size_t first_text = formats.size(), first_image = formats.size();
-    for (std::size_t i = 0; i < formats.size(); i++) {
-      kinds.push_back(formats[i].kind);
-      if (formats[i].kind == clipbundle::kind::text && first_text == formats.size()) {
-        first_text = i;
-      }
-      if (formats[i].kind == clipbundle::kind::image && first_image == formats.size()) {
-        first_image = i;
-      }
+    bool image_offered = false;
+    for (const offered &f : formats) {
+      kinds.push_back(f.kind);
+      image_offered = image_offered || f.kind == clipbundle::kind::image;
     }
-    // Decided before reading, so an app isn't asked to render a bitmap that won't be sent
-    bool want_image = !out.file_copy && clipbundle::include_image(kinds);
-    bool image_first = want_image && first_image < first_text;
 
     std::vector<std::pair<std::size_t, clipbundle::item>> items;
     std::size_t budget = clipbundle::k_max_raw_bytes;
@@ -383,17 +398,32 @@ namespace fork_tweaks::clipboard_win {
 
     // Plain text first: it's always sent, even for file copies
     std::string raw;
+    std::string plain_text;
     if (IsClipboardFormatAvailable(CF_UNICODETEXT) && read_global(CF_UNICODETEXT, raw)) {
       const wchar_t *text = reinterpret_cast<const wchar_t *>(raw.data());
       std::size_t length = 0;
       while (length < raw.size() / 2 && text[length] != L'\0') {
         length++;
       }
-      std::string utf8 = clipbundle::to_lf(utf16_to_utf8(text, length));
-      if (!utf8.empty()) {
-        add(formats.size(), "text/plain", std::move(utf8));
+      plain_text = clipbundle::to_lf(utf16_to_utf8(text, length));
+      if (!plain_text.empty()) {
+        add(formats.size(), "text/plain", plain_text);
       }
     }
+
+    // The HTML too, which tells a picture copy (a browser's <img> tag) from a text copy
+    std::string html;
+    bool have_html = false;
+    for (const offered &f : formats) {
+      if (f.name == "HTML Format") {
+        have_html = read_global(f.format, raw) && clipbundle::cf_html_parse(raw, html);
+        break;
+      }
+    }
+
+    // Decided before reading any bitmap, so an app isn't asked to render one that won't be sent
+    bool want_image = !out.file_copy && clipbundle::include_image(kinds, plain_text, html);
+    bool image_first = want_image;
 
     std::string dib;
     std::size_t dib_position = 0;
@@ -420,17 +450,21 @@ namespace fork_tweaks::clipboard_win {
         if (image && (!want_image || have_encoded_image)) {
           continue;
         }
+
+        std::string type = info->type;
+        if (type == "text/html") {
+          // Already read for the image rule
+          if (have_html) {
+            add(i, info->type, std::move(html));
+            have_html = false;
+          }
+          continue;
+        }
         if (!read_global(f.format, raw)) {
           continue;
         }
 
-        std::string type = info->type;
-        if (type == "text/html") {
-          std::string html;
-          if (clipbundle::cf_html_parse(raw, html)) {
-            add(i, info->type, std::move(html));
-          }
-        } else if (type == "text/rtf") {
+        if (type == "text/rtf") {
           add(i, info->type, clipbundle::strip_trailing_nuls(raw));
         } else if (type == "image/png") {
           raw.resize(clipbundle::png_length(raw));
@@ -464,6 +498,11 @@ namespace fork_tweaks::clipboard_win {
       out.items.push_back(std::move(entry.second));
     }
     clipbundle::prepare_for_send(out.items, image_first);
+
+    bool image_sent = std::any_of(out.items.begin(), out.items.end(), [](const clipbundle::item &it) {
+      return clipbundle::is_image_type(it.type);
+    });
+    out.image_not_sent = image_offered && !out.file_copy && !image_sent;
     return true;
   }
 
@@ -489,7 +528,16 @@ namespace fork_tweaks::clipboard_win {
     };
 
     // Everything is prepared before opening the clipboard, so it's held as briefly as possible
+    std::vector<std::string> seen;
+    bool have_dib = false;
     for (const clipbundle::item &it : items) {
+      // One item per type, since a repeated type would only replace the first, and images must be
+      // the format they claim to be
+      if (std::find(seen.begin(), seen.end(), it.type) != seen.end() || !clipbundle::data_matches_type(it.type, it.data)) {
+        continue;
+      }
+      seen.push_back(it.type);
+
       if (it.type == "text/plain") {
         std::wstring text = utf8_to_utf16(clipbundle::to_crlf(it.data));
         add(CF_UNICODETEXT, text.c_str(), (text.size() + 1) * sizeof(wchar_t));
@@ -499,9 +547,13 @@ namespace fork_tweaks::clipboard_win {
         add_string(registered("HTML Format"), clipbundle::cf_html_build(it.data));
       } else if (it.type == "image/png" || it.type == "image/jpeg") {
         add(registered(it.type == "image/png" ? "PNG" : "JFIF"), it.data.data(), it.data.size());
-        std::string dib = image_to_dibv5(it.data);
-        if (!dib.empty()) {
-          add(CF_DIBV5, dib.data(), dib.size());
+        // The clipboard holds one bitmap, so only the first image is decoded for it
+        if (!have_dib) {
+          std::string dib = image_to_dibv5(it.data, it.type == "image/png" ? GUID_ContainerFormatPng : GUID_ContainerFormatJpeg);
+          if (!dib.empty()) {
+            add(CF_DIBV5, dib.data(), dib.size());
+            have_dib = true;
+          }
         }
       } else if (const clipbundle::type_info *info = clipbundle::find_type(it.type); info != nullptr && info->windows_name != nullptr) {
         add(registered(info->windows_name), it.data.data(), it.data.size());

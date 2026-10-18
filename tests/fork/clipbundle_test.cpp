@@ -5,7 +5,9 @@
 #include "clipbundle.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <new>
 #include <random>
 #include <string>
 #include <vector>
@@ -13,6 +15,38 @@
 using namespace clipbundle;
 
 static int s_Failures = 0;
+static std::size_t s_LargestAllocation = 0;
+
+// Records the largest allocation, so tests can check a bad bundle is refused before allocating for it
+void *operator new(std::size_t size) {
+  if (size > s_LargestAllocation) {
+    s_LargestAllocation = size;
+  }
+  if (void *p = std::malloc(size > 0 ? size : 1)) {
+    return p;
+  }
+  throw std::bad_alloc();
+}
+
+void *operator new(std::size_t size, const std::nothrow_t &) noexcept {
+  try {
+    return operator new(size);
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+void operator delete(void *p) noexcept {
+  std::free(p);
+}
+
+void operator delete(void *p, std::size_t) noexcept {
+  std::free(p);
+}
+
+void operator delete(void *p, const std::nothrow_t &) noexcept {
+  std::free(p);
+}
 
 #define CHECK(cond) \
   do { \
@@ -140,6 +174,25 @@ static void test_corrupt_input() {
   std::string unknown = encode(one, false);
   unknown[unknown.size() - 3 - 4 - 4 - 1] = 7;
   CHECK(!decode(unknown, out));
+
+#ifdef CLIPBUNDLE_WITH_ZLIB
+  // A compressed item claiming more than its bytes can inflate to fails before allocating it
+  bundle zeros;
+  zeros.items = {{"text/plain", std::string(std::size_t(8) << 20, '\0')}};
+  std::string wire_zeros = encode(zeros);
+  CHECK(decode(wire_zeros, out) && same_items(out.items, zeros.items));  // the best ratio deflate gets
+  const std::size_t raw_at = 4 + 2 + 2 + 8 + 1 + 1 + 1 + 10 + 1;  // header, no token, one "text/plain" item
+  const std::size_t stored_size = wire_zeros.size() - raw_at - 8;
+  CHECK(wire_zeros[raw_at - 1] == 1);  // zlib
+  for (std::uint32_t claimed : {static_cast<std::uint32_t>(stored_size * 1032 + 1), static_cast<std::uint32_t>(k_max_raw_bytes)}) {
+    for (int i = 0; i < 4; i++) {
+      wire_zeros[raw_at + i] = static_cast<char>((claimed >> (8 * i)) & 0xFF);
+    }
+    s_LargestAllocation = 0;
+    CHECK(!decode(wire_zeros, out));
+    CHECK(s_LargestAllocation < claimed);
+  }
+#endif
 }
 
 static void test_etag() {
@@ -170,6 +223,17 @@ static void test_tables() {
   CHECK(is_image_type("image/png") && !is_image_type("text/plain"));
   CHECK(is_office_type("ms/gvml") && !is_office_type("text/rtf"));
   CHECK(is_text_type("text/html") && !is_text_type("image/png"));
+}
+
+static void test_signatures() {
+  CHECK(data_matches_type("image/png", std::string("\x89PNG\r\n\x1a\n...", 11)));
+  CHECK(data_matches_type("image/jpeg", "\xFF\xD8\xFF\xE0..."));
+  CHECK(!data_matches_type("image/png", "\xFF\xD8\xFF\xE0..."));  // a JPEG labeled PNG
+  CHECK(!data_matches_type("image/jpeg", "BM...."));
+  CHECK(!data_matches_type("image/png", ""));
+  CHECK(!data_matches_type("image/gif", "GIF89a"));  // not a type the bundle carries
+  CHECK(data_matches_type("text/plain", "anything"));
+  CHECK(data_matches_type("ms/gvml", ""));
 }
 
 static void test_line_endings() {
@@ -286,13 +350,45 @@ static void test_dib() {
   CHECK(dib_to_bmp("tiny").empty());
 }
 
+static void test_picture_text() {
+  // HTML that shows no text
+  CHECK(html_visible_text_empty(""));
+  CHECK(html_visible_text_empty("<html><body><!--StartFragment--><img src=\"https://example.com/cat.png\" alt=\"A cat\"/><!--EndFragment--></body></html>"));
+  CHECK(html_visible_text_empty("<html><head><title>Cat</title><style>p{color:red}</style><meta charset=\"utf-8\"></head><body>\r\n &nbsp;<img src=x>&#160;</body></html>"));
+  CHECK(html_visible_text_empty("<script>var a = 'text';</script><IMG SRC=x>\xC2\xA0"));
+  CHECK(html_visible_text_empty("<img src=x"));  // cut off inside a tag
+  // HTML with text
+  CHECK(!html_visible_text_empty("<html><body><!--StartFragment--><table><tr><td>1</td></tr></table><!--EndFragment--></body></html>"));
+  CHECK(!html_visible_text_empty("<img src=x> caption"));
+  CHECK(!html_visible_text_empty("<header>Shown</header>"));  // not <head>
+  CHECK(!html_visible_text_empty("&amp;"));
+  CHECK(!html_visible_text_empty("<p>caf\xC3\xA9</p>"));
+
+  // Plain text that's only a picture's address, or nothing
+  CHECK(picture_only_text(""));
+  CHECK(picture_only_text(" \n\t"));
+  CHECK(picture_only_text("https://cdn.example.com/a.png?size=large"));
+  CHECK(picture_only_text("  HTTP://EXAMPLE.COM/A.PNG\n"));
+  CHECK(picture_only_text("data:image/png;base64,iVBORw0KGgo="));
+  CHECK(!picture_only_text("hello"));
+  CHECK(!picture_only_text("see https://example.com/a.png"));
+  CHECK(!picture_only_text("1\t2\n3\t4\n"));
+}
+
 static void test_rules() {
+  const std::string img_html = "<html><body><!--StartFragment--><img src=\"https://example.com/a.png\"/><!--EndFragment--></body></html>";
+  const std::string table_html = "<html><body><!--StartFragment--><table><tr><td>1</td><td>2</td></tr></table><!--EndFragment--></body></html>";
+
   // R3 with the format orders apps really use
-  CHECK(!include_image({kind::other, kind::text, kind::text, kind::image}));  // Excel range: text before its bitmap
-  CHECK(include_image({kind::other, kind::image, kind::text}));  // Word picture: the picture comes first
-  CHECK(include_image({kind::image}));  // Snipping Tool / screenshot
-  CHECK(include_image({kind::other, kind::image, kind::text}));  // browser "Copy Image" (PNG, then HTML)
-  CHECK(include_image({}));
+  CHECK(!include_image({kind::other, kind::text, kind::text, kind::image}, "1\t2\n", table_html));  // Excel range: text before its bitmap
+  CHECK(!include_image({kind::text, kind::text, kind::image}, "Some words", "<p>Some words</p>"));  // Word text with a rendered bitmap
+  CHECK(!include_image({kind::text, kind::image}, "Some words", ""));  // text and a bitmap, no HTML
+  CHECK(include_image({kind::other, kind::image, kind::text}, "caption", "<p>caption</p>"));  // Word picture: the picture comes first
+  CHECK(include_image({kind::image}, "", ""));  // Snipping Tool / screenshot
+  CHECK(include_image({kind::other, kind::text, kind::image}, "", img_html));  // Chromium "Copy image": HTML, then the bitmap
+  CHECK(include_image({kind::text, kind::text, kind::image}, "https://example.com/a.png", img_html));  // Firefox: HTML and the URL as text
+  CHECK(include_image({kind::text, kind::image}, "", ""));  // an empty text format before the picture
+  CHECK(include_image({}, "", ""));
 
   // Ordering: Office first, then RTF/HTML (source order), images, then plain text
   std::vector<item> items = {{"text/plain", "t"}, {"image/png", "p"}, {"text/html", "<b>h</b>"}, {"text/rtf", "{\\rtf1}"}, {"ms/gvml", "g"}};
@@ -304,9 +400,22 @@ static void test_rules() {
   CHECK(items[4].type == "text/plain");
 
   // A picture copy puts the image first
-  items = {{"text/plain", "t"}, {"text/html", "<img>"}, {"image/png", "p"}};
+  items = {{"text/plain", "t"}, {"text/html", "<b>h</b>"}, {"image/png", "p"}};
   prepare_for_send(items, true);
-  CHECK(items[0].type == "image/png" && items[2].type == "text/plain");
+  CHECK(items.size() == 3 && items[0].type == "image/png" && items[2].type == "text/plain");
+
+  // R6: ...and drops HTML that only points at the picture
+  items = {{"text/plain", "https://example.com/a.png"}, {"text/html", img_html}, {"image/png", "p"}};
+  prepare_for_send(items, true);
+  CHECK(items.size() == 2 && items[0].type == "image/png" && items[1].type == "text/plain");
+  // ...but keeps it when the image didn't make it
+  items = {{"text/html", img_html}};
+  prepare_for_send(items, true);
+  CHECK(items.size() == 1);
+  // ...and when it isn't a picture copy
+  items = {{"text/html", img_html}, {"image/png", "p"}};
+  prepare_for_send(items, false);
+  CHECK(items.size() == 2);
 
   // R4: Word's HTML with local images is dropped when RTF is there...
   items = {{"text/html", "<img src=\"file:///C:/clip_image001.png\">"}, {"text/rtf", "{\\rtf1\\pict}"}, {"text/plain", "t"}};
@@ -342,11 +451,13 @@ int main() {
   test_corrupt_input();
   test_etag();
   test_tables();
+  test_signatures();
   test_line_endings();
   test_cf_html();
   test_html_helpers();
   test_trimming();
   test_dib();
+  test_picture_text();
   test_rules();
   test_limit();
 

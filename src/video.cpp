@@ -43,6 +43,12 @@ using namespace std::literals;
 
 namespace video {
 
+  // [fork] What the client is told about the display's HDR, once per encoding session
+  static void log_hdr_metadata(const SS_HDR_METADATA &metadata) {
+    BOOST_LOG(info) << "HDR metadata for the client: peak "sv << metadata.maxDisplayLuminance << " nits, full frame "sv
+                    << metadata.maxFullFrameLuminance << " nits, black "sv << metadata.minDisplayLuminance / 10000.0 << " nits"sv;
+  }
+
   /**
    * @brief Check if we can allow probing for the encoders.
    * @return True if there should be no issues with the probing, false if we should prevent it.
@@ -2157,6 +2163,7 @@ namespace video {
     if (colorspace_is_hdr(encode_device->colorspace)) {
       if (disp->get_hdr_metadata(hdr_info->metadata)) {
         hdr_info->enabled = true;
+        log_hdr_metadata(hdr_info->metadata);
       } else {
         BOOST_LOG(error) << "Couldn't get display hdr metadata when colorspace selection indicates it should have one";
       }
@@ -2422,6 +2429,7 @@ namespace video {
       if (colorspace_is_hdr(encode_device->colorspace)) {
         if (display->get_hdr_metadata(hdr_info->metadata)) {
           hdr_info->enabled = true;
+          log_hdr_metadata(hdr_info->metadata);
         } else {
           BOOST_LOG(error) << "Couldn't get display hdr metadata when colorspace selection indicates it should have one";
         }

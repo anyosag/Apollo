@@ -5,54 +5,92 @@
 // local includes
 #include "undo_file.h"
 
+// platform includes (sddl.h needs windows.h, which undo_file.h includes)
+#include <sddl.h>
+
 namespace {
 
   using namespace nvprefs;
 
-  DWORD relax_permissions(HANDLE file_handle) {
-    PACL old_dacl = nullptr;
+  /// SYSTEM and Administrators only, owned by Administrators, and not inherited from %ProgramData%,
+  /// where every user may create files and folders
+  constexpr auto protected_folder_sddl = L"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
 
-    safe_hlocal<PSECURITY_DESCRIPTOR> sd;
-    DWORD status = GetSecurityInfo(file_handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &old_dacl, nullptr, &sd);
-    if (status != ERROR_SUCCESS) {
-      return status;
-    }
-
-    safe_sid users_sid;
-    SID_IDENTIFIER_AUTHORITY nt_authorithy = SECURITY_NT_AUTHORITY;
-    if (!AllocateAndInitializeSid(&nt_authorithy, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_USERS, 0, 0, 0, 0, 0, 0, &users_sid)) {
-      return GetLastError();
-    }
-
-    EXPLICIT_ACCESS ea = {};
-    ea.grfAccessPermissions = GENERIC_READ | GENERIC_WRITE | DELETE;
-    ea.grfAccessMode = GRANT_ACCESS;
-    ea.grfInheritance = NO_INHERITANCE;
-    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-    ea.Trustee.ptstrName = (LPTSTR) users_sid.get();
-
-    safe_hlocal<PACL> new_dacl;
-    status = SetEntriesInAcl(1, &ea, old_dacl, &new_dacl);
-    if (status != ERROR_SUCCESS) {
-      return status;
-    }
-
-    status = SetSecurityInfo(file_handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, new_dacl.get(), nullptr);
-    if (status != ERROR_SUCCESS) {
-      return status;
-    }
-
-    return 0;
+  bool owner_is_trusted(PSID owner) {
+    return owner != nullptr && (IsWellKnownSid(owner, WinLocalSystemSid) || IsWellKnownSid(owner, WinBuiltinAdministratorsSid));
   }
 
 }  // namespace
 
 namespace nvprefs {
 
+  bool prepare_undo_folder(const std::filesystem::path &folder) {
+    PSECURITY_DESCRIPTOR raw_sd = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(protected_folder_sddl, SDDL_REVISION_1, &raw_sd, nullptr)) {
+      error_message("Couldn't build the undo folder's permissions");
+      return false;
+    }
+    safe_hlocal<PSECURITY_DESCRIPTOR> sd {raw_sd};
+
+    SECURITY_ATTRIBUTES sa {sizeof(sa), sd.get(), FALSE};
+    if (CreateDirectoryW(folder.c_str(), &sa)) {
+      return true;
+    }
+    if (GetLastError() != ERROR_ALREADY_EXISTS) {
+      error_message("Couldn't create undo folder");
+      return false;
+    }
+
+    // It exists. SYSTEM creates, reads and deletes files in it, so use it only if it's a real folder
+    // (not a link elsewhere) that SYSTEM or Administrators own; another user could have made it first.
+    safe_handle dir {CreateFileW(folder.c_str(), READ_CONTROL | WRITE_DAC, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr)};
+    if (!dir) {
+      error_message("Couldn't open undo folder");
+      return false;
+    }
+
+    BY_HANDLE_FILE_INFORMATION info {};
+    if (!GetFileInformationByHandle(dir.get(), &info) || !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+      error_message(L"Not using " + folder.wstring() + L": it isn't a plain folder. Delete it to let Apollo recreate it.");
+      return false;
+    }
+
+    PSID owner = nullptr;
+    PSECURITY_DESCRIPTOR raw_current = nullptr;
+    if (GetSecurityInfo(dir.get(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &owner, nullptr, nullptr, nullptr, &raw_current) != ERROR_SUCCESS) {
+      error_message("Couldn't read the undo folder's owner");
+      return false;
+    }
+    safe_hlocal<PSECURITY_DESCRIPTOR> current {raw_current};
+    if (!owner_is_trusted(owner)) {
+      error_message(L"Not using " + folder.wstring() + L": it's owned by another account, not SYSTEM or Administrators. Delete it to let Apollo recreate it.");
+      return false;
+    }
+
+    // Folders made by earlier versions inherited %ProgramData%'s permissions; replace them
+    PACL dacl = nullptr;
+    BOOL present = FALSE;
+    BOOL defaulted = FALSE;
+    if (!GetSecurityDescriptorDacl(sd.get(), &present, &dacl, &defaulted) ||
+        SetSecurityInfo(dir.get(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl, nullptr) != ERROR_SUCCESS) {
+      error_message("Couldn't restrict the undo folder's permissions");
+      return false;
+    }
+    return true;
+  }
+
   std::optional<undo_file_t> undo_file_t::open_existing_file(std::filesystem::path file_path, bool &access_denied) {
     undo_file_t file;
-    file.file_handle.reset(CreateFileW(file_path.c_str(), GENERIC_READ | DELETE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    // Not following links: SYSTEM deletes this file, so it must be the file itself
+    file.file_handle.reset(CreateFileW(file_path.c_str(), GENERIC_READ | DELETE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
     if (file.file_handle) {
+      BY_HANDLE_FILE_INFORMATION info {};
+      if (!GetFileInformationByHandle(file.file_handle.get(), &info) || (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) || info.nNumberOfLinks != 1) {
+        error_message("The undo file isn't a plain file; not using it");
+        file.file_handle.reset();
+        access_denied = true;
+        return std::nullopt;
+      }
       access_denied = false;
       return file;
     } else {
@@ -64,13 +102,10 @@ namespace nvprefs {
 
   std::optional<undo_file_t> undo_file_t::create_new_file(std::filesystem::path file_path) {
     undo_file_t file;
-    file.file_handle.reset(CreateFileW(file_path.c_str(), GENERIC_WRITE | STANDARD_RIGHTS_ALL, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
+    // It inherits the undo folder's permissions: SYSTEM and Administrators only
+    file.file_handle.reset(CreateFileW(file_path.c_str(), GENERIC_WRITE | STANDARD_RIGHTS_ALL, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
 
     if (file.file_handle) {
-      // give GENERIC_READ, GENERIC_WRITE and DELETE permissions to Users group
-      if (relax_permissions(file.file_handle.get()) != 0) {
-        error_message("Failed to relax permissions on undo file");
-      }
       return file;
     } else {
       return std::nullopt;

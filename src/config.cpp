@@ -508,7 +508,10 @@ namespace config {
       3s,  // config_revert_delay
       {},  // config_revert_on_disconnect
       {},  // mode_remapping
-      {}  // wa
+      {
+        {},  // hdr_toggle_delay
+        false,  // virtual_display_hdr_toggle: not needed on LuzVDA's displays (round 3)
+      }  // wa
     },  // display_device
 
     0,  // max_bitrate
@@ -535,7 +538,7 @@ namespace config {
 
     20,  // fecPercentage
 
-    ENCRYPTION_MODE_NEVER,  // lan_encryption_mode
+    ENCRYPTION_MODE_OPPORTUNISTIC,  // lan_encryption_mode: encrypt when the client supports it
     ENCRYPTION_MODE_OPPORTUNISTIC,  // wan_encryption_mode
   };
 
@@ -1203,6 +1206,7 @@ namespace config {
       int_between_f(vars, "dd_wa_hdr_toggle_delay", value, {0, 3000});
       video.dd.wa.hdr_toggle_delay = std::chrono::milliseconds {value};
     }
+    bool_f(vars, "dd_wa_virtual_display_hdr_toggle", video.dd.wa.virtual_display_hdr_toggle);
 
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});

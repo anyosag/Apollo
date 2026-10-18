@@ -149,6 +149,8 @@ namespace platf::dxgi {
       case WAIT_ABANDONED:
       case DXGI_ERROR_ACCESS_LOST:
       case DXGI_ERROR_ACCESS_DENIED:
+        // [fork] Why the stream's capture, and so its encoder, restarts
+        BOOST_LOG(info) << "Capture restarts: the desktop duplication was lost [0x"sv << util::hex(status).to_string_view() << ']';
         return capture_e::reinit;
       default:
         BOOST_LOG(error) << "Couldn't acquire next frame [0x"sv << util::hex(status).to_string_view();
@@ -233,6 +235,8 @@ namespace platf::dxgi {
       // display or GPU changes. We should reinit to examine the updated state of
       // the display subsystem. It is recommended to call this once per frame.
       if (!factory->IsCurrent()) {
+        // [fork] Why the stream's capture, and so its encoder, restarts
+        BOOST_LOG(info) << "Capture restarts: Windows' displays or GPUs changed (DXGI factory no longer current)"sv;
         return platf::capture_e::reinit;
       }
 

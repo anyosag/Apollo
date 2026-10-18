@@ -28,13 +28,22 @@ jobs:
   build_windows:
     name: Windows x64
     runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write  # sign the build provenance
+      attestations: write  # store it
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
           submodules: recursive
+
+      # Fixes the fork carries in submodules it doesn't own (patches/, see FORK.md)
+      - name: Apply submodule patches
+        shell: bash
+        run: bash scripts/fork/apply-patches.sh
 
       # Version is the latest upstream release plus the number of commits since it,
       # e.g. 0.4.8.26, so Apollo's update check compares correctly against upstream releases.
@@ -48,40 +57,46 @@ jobs:
           echo "BUILD_VERSION=$version" >> "$GITHUB_ENV"
           echo "COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      # The SudoVDA virtual display driver's binaries (SudoVDA.dll, nefconc.exe) aren't in the source tree
-      # (*.dll is gitignored); upstream adds them by hand when building releases. Without them the installer
-      # ships an incomplete driver and Apollo has no virtual display, so take them from an official release.
-      - name: Add SudoVDA driver binaries
+      # The LuzVDA virtual display driver (anyosag/LuzVDA). Its CI builds it unsigned; its owner signs it on
+      # their own PC and publishes the signed zip as a release. The source tree has only install.bat,
+      # uninstall.bat and the public certificate; the driver comes from that release, pinned by SHA256.
+      - name: Add LuzVDA driver
         shell: pwsh
         env:
-          SUDOVDA_RELEASE: v0.4.6
-          SUDOVDA_INSTALLER_SHA256: 42b2aefaacb3474511517a56b96ee9f0517f30ac38b5dd2fda9fd5b478f5021a
+          LUZVDA_RELEASE: signed-0.0.0.9
+          LUZVDA_ZIP: LuzVDA-0.0.0.9.zip
+          LUZVDA_ZIP_SHA256: 2aa6d98c44d5dc5615b668cc7a5cb2db939f8e13c3fcd098919dd0319409893a
         run: |
           $ErrorActionPreference = 'Stop'
-          $installer = Join-Path $env:RUNNER_TEMP 'apollo-release.exe'
-          $extracted = Join-Path $env:RUNNER_TEMP 'sudovda'
-          $version = $env:SUDOVDA_RELEASE.TrimStart('v')
-          Invoke-WebRequest "https://github.com/ClassicOldSong/Apollo/releases/download/$env:SUDOVDA_RELEASE/Apollo-$version.exe" -OutFile $installer
-          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
-          if ($hash -ne $env:SUDOVDA_INSTALLER_SHA256) { throw "Apollo $env:SUDOVDA_RELEASE installer has unexpected SHA256 $hash" }
+          $zip = Join-Path $env:RUNNER_TEMP $env:LUZVDA_ZIP
+          $extracted = Join-Path $env:RUNNER_TEMP 'luzvda'
+          Invoke-WebRequest "https://github.com/anyosag/LuzVDA/releases/download/$env:LUZVDA_RELEASE/$env:LUZVDA_ZIP" -OutFile $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:LUZVDA_ZIP_SHA256) { throw "$env:LUZVDA_ZIP from $env:LUZVDA_RELEASE has unexpected SHA256 $hash" }
+          Expand-Archive $zip -DestinationPath $extracted -Force
 
-          7z e $installer 'drivers\sudovda\*' "-o$extracted" -y | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "7z couldn't extract the driver from the Apollo $env:SUDOVDA_RELEASE installer" }
-
-          # The binaries are signed against the catalog in the source tree; if upstream updates the driver,
-          # they no longer match and Windows would reject it, so fail here instead.
-          $driverDir = 'src_assets/windows/drivers/sudovda'
-          foreach ($file in 'SudoVDA.inf', 'sudovda.cat', 'sudovda.cer') {
-            if ((Get-FileHash "$extracted/$file").Hash -ne (Get-FileHash "$driverDir/$file").Hash) {
-              throw "$file differs from Apollo $env:SUDOVDA_RELEASE. Set SUDOVDA_RELEASE to a release with the same driver."
-            }
+          # Signed with the certificate the installer trusts. The runner doesn't trust it, so the
+          # signature's status isn't Valid here; its signer must still be that certificate.
+          $driverDir = 'src_assets/windows/drivers/luzvda'
+          $trusted = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new((Resolve-Path "$driverDir/luzvda.cer").Path)
+          $shipped = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new((Resolve-Path "$extracted/luzvda.cer").Path)
+          if ($shipped.Thumbprint -ne $trusted.Thumbprint) { throw "The release's luzvda.cer isn't $driverDir/luzvda.cer ($($trusted.Thumbprint))" }
+          foreach ($file in 'LuzVDA.dll', 'luzvda.cat', 'luzvda-ctl.exe') {
+            $signer = (Get-AuthenticodeSignature "$extracted/$file").SignerCertificate
+            if (-not $signer -or $signer.Thumbprint -ne $trusted.Thumbprint) { throw "$file isn't signed with $driverDir/luzvda.cer" }
           }
-          foreach ($file in 'SudoVDA.dll', 'nefconc.exe') { Copy-Item "$extracted/$file" $driverDir }
+
+          # Apollo talks to the driver through the same protocol header, line endings aside
+          $released = (Get-Content -Raw "$extracted/luzvda-ioctl.h") -replace "`r`n", "`n"
+          $ours = (Get-Content -Raw 'third-party/luzvda/luzvda-ioctl.h') -replace "`r`n", "`n"
+          if ($released -ne $ours) { throw "third-party/luzvda/luzvda-ioctl.h differs from the one in $env:LUZVDA_RELEASE" }
+
+          foreach ($file in 'LuzVDA.inf', 'LuzVDA.dll', 'luzvda.cat', 'luzvda-ctl.exe') { Copy-Item "$extracted/$file" $driverDir }
           Get-ChildItem $driverDir | Format-Table Name, Length
 
       # MSYS2's nodejs crashes on startup (gcc-16 libstdc++ regression), so use the official build.
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0
         with:
           node-version: lts/*
 
@@ -93,7 +108,7 @@ jobs:
 
       # Boost is left out on purpose: the build needs exactly 1.89.0 and fetches it itself.
       - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2.33.0
         with:
           msystem: UCRT64
           update: true
@@ -118,6 +133,8 @@ jobs:
       - name: Fork unit tests
         shell: msys2 {0}
         run: |
+          # Stop at the first failing test or header, whatever flags the MSYS2 shell runs with
+          set -eo pipefail
           g++ -std=c++17 -Wall -Wextra -DCLIPBUNDLE_WITH_ZLIB -Isrc/fork \
             tests/fork/clipbundle_test.cpp src/fork/clipbundle.cpp -lz -o clipbundle_test
           ./clipbundle_test
@@ -125,6 +142,17 @@ jobs:
             tests/fork/clipboard_win_smoke.cpp src/fork/clipboard_win.cpp src/fork/clipbundle.cpp \
             -lz -lole32 -luser32 -o clipboard_win_smoke
           ./clipboard_win_smoke
+          # Header-only fork code; each test is a program of its own
+          for test in tests/fork/header/*_test.cpp; do
+            name=$(basename "$test" .cpp)
+            g++ -std=c++23 -Wall -Wextra -iquote src -Ithird-party "$test" -lcrypto -o "$name"
+            "./$name"
+          done
+          # Each fork header on its own with the build's include paths (the repository root and
+          # third-party; the tests above also have src/), so one that builds only in the tests fails here
+          for header in src/fork/*.h; do
+            echo "#include \"$header\"" | g++ -std=c++23 -fsyntax-only -iquote . -Ithird-party -x c++ -
+          done
 
       - name: Build
         shell: msys2 {0}
@@ -162,16 +190,26 @@ jobs:
       - name: Check driver is packaged
         shell: pwsh
         run: |
+          $files = 'LuzVDA.inf', 'LuzVDA.dll', 'luzvda.cat', 'luzvda-ctl.exe', 'luzvda.cer', 'install.bat', 'uninstall.bat'
           foreach ($package in 'Apollo-windows-installer.exe', 'Apollo-windows-portable.zip') {
             $listing = 7z l "artifacts/$package"
-            foreach ($file in 'SudoVDA.dll', 'nefconc.exe') {
-              if (-not ($listing -match "drivers\\sudovda\\$([regex]::Escape($file))")) { throw "$package is missing drivers\sudovda\$file" }
+            foreach ($file in $files) {
+              if (-not ($listing -match "drivers\\luzvda\\$([regex]::Escape($file))")) { throw "$package is missing drivers\luzvda\$file" }
             }
           }
-          "Both packages include SudoVDA.dll and nefconc.exe"
+          "Both packages include the LuzVDA driver: $($files -join ', ')"
+
+      # Lets anyone check a downloaded installer came from this workflow:
+      #   gh attestation verify Apollo-windows-installer.exe -R anyosag/Apollo
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: |
+            artifacts/Apollo-windows-installer.exe
+            artifacts/Apollo-windows-portable.zip
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: Apollo-windows-${{ env.BUILD_VERSION }}
           path: artifacts/

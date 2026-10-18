@@ -22,6 +22,7 @@ namespace fork_tweaks::clipboard_win {
     std::uint32_t sequence = 0;  ///< GetClipboardSequenceNumber() before reading, so a change while reading isn't missed
     bool concealed = false;  ///< A password manager marked the content as private
     bool file_copy = false;  ///< Files copied in Explorer; only their text is read
+    bool image_not_sent = false;  ///< An image was offered but isn't in items (a text copy, or it couldn't be converted)
     std::vector<clipbundle::item> items;  ///< In sending order
     std::vector<std::string> formats;  ///< Every format offered, for debug logs
   };

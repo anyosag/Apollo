@@ -24,6 +24,9 @@
 #include "video.h"
 
 #ifdef _WIN32
+  #include <cstring>
+
+  #include "fork/luzvda_desc.h"
   #include "platform/windows/misc.h"
   #include "platform/windows/virtual_display.h"
 #endif
@@ -366,20 +369,19 @@ int main(int argc, char *argv[]) {
 
       BOOST_LOG(info) << "Creating a temporary virtual display to probe for encoders..."sv;
 
-      if (!config::video.adapter_name.empty()) {
-        VDISPLAY::setRenderAdapterByName(platf::from_utf8(config::video.adapter_name));
+      // [fork] The configured adapter, or else the GPU with the most video memory
+      VDISPLAY::setRenderAdapter(config::video.adapter_name);
+
+      // [fork] An 800x600 display at 60 Hz, described as SudoVDA's displays were
+      luzvda_desc::guid_bytes_t guid_bytes;
+      std::memcpy(guid_bytes.data(), probe_guid, guid_bytes.size());
+      auto probe_name = VDISPLAY::createVirtualDisplay(luzvda_desc::display(client_display::describe(std::nullopt, {800, 600, 60000}), "Probe", guid_bytes));
+
+      // [fork] Probe once DXGI lists the display, where the probe looks for it, rather than after a
+      // fixed 500 ms. A failed probe here isn't final: the first launch probes again.
+      if (probe_name.empty() || !VDISPLAY::waitForOutput(probe_name.c_str(), 2s)) {
+        BOOST_LOG(warning) << "vdisplay: the probe display isn't ready, probing anyway"sv;
       }
-
-      VDISPLAY::createVirtualDisplay(
-        probe_uuid_str.c_str(),
-        "Probe",
-        800,
-        600,
-        60,
-        *probe_guid
-      );
-
-      std::this_thread::sleep_for(500ms);
 
       // Probe again anyways
       if (video::probe_encoders()) {

@@ -26,9 +26,11 @@ install(TARGETS audio-info RUNTIME DESTINATION "tools" COMPONENT audio)
 install(TARGETS sunshinesvc RUNTIME DESTINATION "tools" COMPONENT application)
 
 # Drivers
-install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/sudovda"
+# [fork] LuzVDA (anyosag/LuzVDA): the scripts and certificate from the source tree, the signed driver
+# from its release (build-windows.yml)
+install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/luzvda"
         DESTINATION "drivers"
-        COMPONENT sudovda)
+        COMPONENT luzvda)
 
 # Mandatory scripts
 install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/service/"
@@ -96,10 +98,10 @@ set(CPACK_COMPONENT_ASSETS_GROUP "Core")
 set(CPACK_COMPONENT_ASSETS_REQUIRED true)
 
 # drivers
-set(CPACK_COMPONENT_SUDOVDA_DISPLAY_NAME "SudoVDA")
-set(CPACK_COMPONENT_SUDOVDA_DESCRIPTION "Driver required for Virtual Display to function.")
-set(CPACK_COMPONENT_SUDOVDA_GROUP "Drivers")
-set(CPACK_COMPONENT_SUDOVDA_REQUIRED true)
+set(CPACK_COMPONENT_LUZVDA_DISPLAY_NAME "LuzVDA")
+set(CPACK_COMPONENT_LUZVDA_DESCRIPTION "Driver required for Virtual Display to function. Replaces SudoVDA.")
+set(CPACK_COMPONENT_LUZVDA_GROUP "Drivers")
+set(CPACK_COMPONENT_LUZVDA_REQUIRED true)
 
 # audio tool
 set(CPACK_COMPONENT_AUDIO_DISPLAY_NAME "audio-info")
