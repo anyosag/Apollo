@@ -28,6 +28,7 @@
 #include "atomic_file.h"
 #include "file_handler.h"
 #include "fork/clipboard_bundle.h"  // [fork]
+#include "fork/touch_emulation.h"  // [fork]
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
@@ -505,6 +506,19 @@ namespace nvhttp {
     launch_session->input_only = input_only;
 
     return launch_session;
+  }
+
+  /**
+   * @brief [fork] Whether a launch or resume comes from stock Moonlight for iOS, whose Touchscreen
+   * mode's fingers can then reach Windows as touch (fork/touch_emulation.h). Logs what the client calls itself.
+   */
+  bool from_moonlight_ios(const req_https_t &request, const std::string &device_name) {
+    auto it = request->header.find("User-Agent");
+    std::string_view user_agent = it == request->header.end() ? ""sv : std::string_view {it->second};
+    auto ios = touch_emulation::is_moonlight_ios(user_agent);
+    BOOST_LOG(info) << "fork: client ["sv << device_name << "] identifies as ["sv << touch_emulation::printable(user_agent) << ']'
+                    << (ios ? ", stock Moonlight for iOS"sv : ""sv);
+    return ios;
   }
 
   void remove_session(const pair_session_t &sess) {
@@ -1342,6 +1356,7 @@ namespace nvhttp {
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     auto launch_session = make_launch_session(host_audio, is_input_only, args, named_cert_p);
     launch_session->client_address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    launch_session->moonlight_ios = from_moonlight_ios(request, launch_session->device_name);  // [fork]
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
     if (!launch_session->rtsp_cipher && encryption_mode == config::ENCRYPTION_MODE_MANDATORY) {
@@ -1513,6 +1528,7 @@ namespace nvhttp {
     }
     auto launch_session = make_launch_session(host_audio, false, args, named_cert_p);
     launch_session->client_address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    launch_session->moonlight_ios = from_moonlight_ios(request, launch_session->device_name);  // [fork]
 
     if (!proc::proc.allow_client_commands || !named_cert_p->allow_client_commands) {
       launch_session->client_do_cmds.clear();

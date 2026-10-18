@@ -25,6 +25,14 @@ namespace input {
 
   std::shared_ptr<input_t> alloc(safe::mail_t mail);
 
+  /**
+   * @brief [fork] For stock Moonlight for iOS: the fingers of its Touchscreen mode, which arrive as
+   * mouse positions and clicks, reach Windows as touch (fork/touch_emulation.h). Call before input arrives.
+   * @param input The client's input context.
+   * @param device_name The client's name, for the log.
+   */
+  void enable_touch_emulation(std::shared_ptr<input_t> &input, const std::string &device_name);
+
   struct touch_port_t: public platf::touch_port_t {
     int env_width, env_height;
 

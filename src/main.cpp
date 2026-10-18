@@ -12,6 +12,7 @@
 #include "confighttp.h"
 #include "display_device.h"
 #include "entry_handler.h"
+#include "fork/tablet_posture.h"  // [fork]
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
@@ -208,6 +209,9 @@ int main(int argc, char *argv[]) {
   if (!display_device_deinit_guard) {
     BOOST_LOG(error) << "Display device session failed to initialize"sv;
   }
+
+  // [fork] Puts back the tablet posture a run that stopped while a client touched left on
+  fork_tweaks::tablet_posture::recover();
 
 #ifdef _WIN32
   // Modify relevant NVIDIA control panel settings if the system has corresponding gpu
