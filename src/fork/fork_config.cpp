@@ -42,5 +42,6 @@ namespace fork_tweaks {
     bool_option(vars, "fork_virtual_display_app_extends", virtual_display_app_extends);
     bool_option(vars, "fork_ios_touch", ios_touch);
     bool_option(vars, "fork_ios_tablet_posture", ios_tablet_posture);
+    bool_option(vars, "fork_touchpad_passthrough", touchpad_passthrough);
   }
 }  // namespace fork_tweaks

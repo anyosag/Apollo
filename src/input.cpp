@@ -32,6 +32,11 @@ extern "C" {
 #include "thread_pool.h"
 #include "utility.h"
 
+// [fork] trackpad passthrough
+#ifdef _WIN32
+  #include "fork/touchpad_win.h"
+#endif
+
 // Win32 WHEEL_DELTA constant
 #ifndef WHEEL_DELTA
   #define WHEEL_DELTA 120
@@ -1064,6 +1069,26 @@ namespace input {
     platf::touch_update(input->client_context.get(), abs_port, touch);
   }
 
+#ifdef _WIN32
+  /**
+   * @brief [fork] Passes LuzLunar's trackpad frame to the client's synthetic touchpad (src/fork/touchpad_win.*).
+   * @param input The input context pointer.
+   * @param payload The frame packet, whose size validate_input_packet() has checked.
+   */
+  void passthrough_touchpad_frame(std::shared_ptr<input_t> &input, PNV_INPUT_HEADER payload) {
+    if (!config::input.mouse || !fork_tweaks::touchpad_passthrough) {
+      return;
+    }
+
+    luztouchpad::frame frame;
+    if (!luztouchpad::decode((const std::uint8_t *) payload, luztouchpad::k_packet_size, frame)) {
+      BOOST_LOG(debug) << "fork: dropping a malformed trackpad frame"sv;
+      return;
+    }
+    platf::touchpad_frame(input->client_context.get(), frame);
+  }
+#endif
+
   /**
    * @brief Called to pass a pen message to the platform backend.
    * @param input The input context pointer.
@@ -1710,6 +1735,11 @@ namespace input {
       case SS_CONTROLLER_BATTERY_MAGIC:
         passthrough(input, (PSS_CONTROLLER_BATTERY_PACKET) payload);
         break;
+#ifdef _WIN32
+      case luztouchpad::k_magic:  // [fork]
+        passthrough_touchpad_frame(input, payload);
+        break;
+#endif
     }
   }
 
@@ -1759,6 +1789,7 @@ namespace input {
         case MOUSE_BUTTON_UP_EVENT_MAGIC_GEN5:
         case SCROLL_MAGIC_GEN5:
         case SS_HSCROLL_MAGIC:
+        case luztouchpad::k_magic:  // [fork] trackpad passthrough drives the pointer
           if (!(permission & crypto::PERM::input_mouse)) {
             return;
           } else {
@@ -1835,6 +1866,13 @@ namespace input {
         key_press[kp.first] = false;
       }
     });
+
+#ifdef _WIN32
+    // [fork] Lift any fingers still on the client's synthetic touchpad
+    task_pool.push([input]() {
+      platf::touchpad_cancel(input->client_context.get());
+    });
+#endif
   }
 
   class deinit_t: public platf::deinit_t {

@@ -96,6 +96,24 @@ static void test_fixed_types() {
   check_fixed<SS_CONTROLLER_BATTERY_PACKET>(SS_CONTROLLER_BATTERY_MAGIC);
 }
 
+// [fork] LuzLunar's trackpad passthrough frame, which has no structure in Input.h
+struct touchpad_frame_packet {
+  std::uint8_t bytes[luztouchpad::k_packet_size];
+};
+
+static void test_touchpad_frame() {
+  static_assert(sizeof(touchpad_frame_packet) == luztouchpad::k_packet_size);
+  check_fixed<touchpad_frame_packet>(luztouchpad::k_magic);
+
+  // An encoded frame passes as it is
+  luztouchpad::frame f;
+  f.count = 1;
+  f.width = 13000;
+  f.height = 8000;
+  auto bytes = luztouchpad::encode(f);
+  CHECK(validate_input_packet(std::vector<std::uint8_t>(bytes.begin(), bytes.end())));
+}
+
 static void test_unicode() {
   // Text from 0 to the 32-byte maximum, with the size declared and present
   for (std::uint32_t text = 0; text <= UTF8_TEXT_EVENT_MAX_COUNT; text++) {
@@ -112,6 +130,7 @@ static void test_unicode() {
 int main() {
   test_headers();
   test_fixed_types();
+  test_touchpad_frame();
   test_unicode();
 
   if (s_Failures > 0) {

@@ -16,6 +16,9 @@
 // lib includes
 #include <moonlight-common-c/src/Input.h>
 
+// local includes
+#include "fork/luztouchpad.h"  // [fork] trackpad passthrough frames
+
 namespace input {
   namespace validation_detail {
     inline std::uint32_t from_big_endian(std::uint32_t value) {
@@ -95,6 +98,9 @@ namespace input {
         return fixed_size_ok<SS_CONTROLLER_MOTION_PACKET>(packet, declared_size);
       case SS_CONTROLLER_BATTERY_MAGIC:
         return fixed_size_ok<SS_CONTROLLER_BATTERY_PACKET>(packet, declared_size);
+      case luztouchpad::k_magic:
+        // [fork] LuzLunar's trackpad passthrough frame (src/fork/luztouchpad.h)
+        return declared_size == luztouchpad::k_declared_size && packet.size() >= luztouchpad::k_packet_size;
       default:
         // Unknown types are dropped by the dispatcher without reading past the header
         return true;
