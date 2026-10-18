@@ -59,6 +59,7 @@ namespace {
     return elapsed / s_frequency.QuadPart * 1'000'000 + elapsed % s_frequency.QuadPart * 1'000'000 / s_frequency.QuadPart;
   }
 
+  /// One test on its own touchpad, so one test's times can't run backwards into the next's
   struct player_t {
     HSYNTHETICPOINTERDEVICE device = nullptr;
     host_t host;
@@ -67,6 +68,22 @@ namespace {
     int injections = 0;
     int failures = 0;
     DWORD last_error = 0;
+
+    explicit player_t(timing_e t = timing_e::tick_only):
+        timing(t) {
+      auto params = win::touchpad_params(k_width, k_height);
+      device = win::api().create(&params);
+      host.set_device_size(k_width, k_height);
+    }
+
+    ~player_t() {
+      if (device) {
+        win::api().destroy(device);
+      }
+    }
+
+    player_t(const player_t &) = delete;
+    player_t &operator=(const player_t &) = delete;
 
     void inject(const injection_t &i) {
       if (i.count == 0) {
@@ -159,10 +176,20 @@ namespace {
     }
   }
 
-  /// A finger held still without re-injection, then moved. Returns how far the move after the pause took the pointer.
-  long held_then_moved(player_t &p, int hold_ms) {
+  /**
+   * A finger held still, then moved. Returns how far the move after the hold took the pointer.
+   * With keepalive, the still finger is sent again every 100 ms during the hold, as LuzLunar does.
+   */
+  long held_then_moved(player_t &p, int hold_ms, bool keepalive) {
     p.send({{0, luztouchpad::phase_down, 32768, 32768}});
-    p.pause(hold_ms);
+    if (keepalive) {
+      for (int held = 0; held < hold_ms; held += static_cast<int>(luztouchpad::k_keepalive_ms)) {
+        p.pause(static_cast<int>(luztouchpad::k_keepalive_ms) - k_step_ms);
+        p.send({{0, luztouchpad::phase_move, 32768, 32768}});
+      }
+    } else {
+      p.pause(hold_ms);
+    }
     POINT before {};
     GetCursorPos(&before);
     for (int s = 1; s <= 15; s++) {
@@ -213,13 +240,16 @@ int main(int argc, char **argv) {
     return strict ? 1 : 0;
   }
 
-  auto params = win::touchpad_params(k_width, k_height);
-  HSYNTHETICPOINTERDEVICE device = api.create(&params);
-  if (!device) {
-    std::printf("touchpad_win_smoke: skipped, Windows wouldn't make a synthetic touchpad (error %lu)\n", GetLastError());
-    return strict ? 1 : 0;
+  {
+    auto params = win::touchpad_params(k_width, k_height);
+    HSYNTHETICPOINTERDEVICE device = api.create(&params);
+    if (!device) {
+      std::printf("touchpad_win_smoke: skipped, Windows wouldn't make a synthetic touchpad (error %lu)\n", GetLastError());
+      return strict ? 1 : 0;
+    }
+    api.destroy(device);
   }
-  std::printf("Made a %.0f x %.0f mm synthetic touchpad\n", k_width / 100.0, k_height / 100.0);
+  std::printf("Windows makes %.0f x %.0f mm synthetic touchpads; each test below gets its own\n", k_width / 100.0, k_height / 100.0);
 
   int problems = 0;
   auto report = [&](const char *what, const player_t &p, long moved = -1) {
@@ -235,10 +265,7 @@ int main(int argc, char **argv) {
 
   std::printf("One-finger moves, by timing:\n");
   for (timing_e t : {timing_e::tick_only, timing_e::none, timing_e::both}) {
-    player_t p;
-    p.device = device;
-    p.host.set_device_size(k_width, k_height);
-    p.timing = t;
+    player_t p(t);
     long moved = one_finger_move(p);
     report(name(t), p, moved);
     if (t == timing_e::tick_only && (p.failures > 0 || moved == 0)) {
@@ -246,21 +273,23 @@ int main(int argc, char **argv) {
     }
   }
 
-  std::printf("Held fingers (without Apollo's re-injection):\n");
-  for (int hold : {500, 1200, 2500}) {
-    player_t p;
-    p.device = device;
-    p.host.set_device_size(k_width, k_height);
-    long moved = held_then_moved(p, hold);
-    char what[64];
-    std::snprintf(what, sizeof(what), "held %d ms, then moved", hold);
-    report(what, p, moved);
+  std::printf("Held fingers, then moved:\n");
+  for (bool keepalive : {false, true}) {
+    for (int hold : {500, 1200, 2500}) {
+      player_t p;
+      long moved = held_then_moved(p, hold, keepalive);
+      char what[64];
+      std::snprintf(what, sizeof(what), "held %d ms, %s", hold, keepalive ? "sent every 100 ms" : "not sent again");
+      report(what, p, moved);
+      // LuzLunar sends a held finger every 100 ms, so that must keep it moving the pointer
+      if (keepalive && (p.failures > 0 || moved == 0)) {
+        problems++;
+      }
+    }
   }
 
   {
     player_t p;
-    p.device = device;
-    p.host.set_device_size(k_width, k_height);
     std::printf("Gestures (watch the screen):\n");
     two_finger_scroll(p);
     report("two-finger scroll with inertia", p);
@@ -276,8 +305,6 @@ int main(int argc, char **argv) {
       report("tap and click", p);
     }
   }
-
-  api.destroy(device);
 
   if (problems > 0) {
     std::printf("touchpad_win_smoke: %d problem(s)\n", problems);
