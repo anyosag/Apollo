@@ -276,6 +276,8 @@
     "file_apps_desc": "The file where current apps of Apollo are stored.",
     "file_state": "State File",
     "file_state_desc": "The file where current state of Apollo is stored",
+    "fork_virtual_display_app_extends": "The Virtual Display app adds the client's screen next to this PC's displays",
+    "fork_virtual_display_app_extends_desc": "The PC's displays stay on and the primary display stays primary, so the client's screen is one more extended display, like a MacBook used as an extra monitor. Arrange it in Windows' display settings; Windows remembers where it goes. The device configuration still sets its resolution, refresh rate and HDR, but \"Deactivate other displays…\" and \"…make it a primary display\" only activate it, and it isn't moved to the corner. Desktop and the other apps are unaffected.",
     "forward_rumble": "Forward Rumble Messages",
     "forward_rumble_desc": "Forward Rumble Messages to clients",
     "gamepad": "Emulated Gamepad Type",

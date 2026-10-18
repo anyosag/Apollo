@@ -189,6 +189,11 @@ namespace proc {
     /// [fork] What the driver was last asked for, to tell on resume whether the screen changed
     LUZVDA_DISPLAY_DESC _vdisplay_desc {};
 
+    /// [fork] The Virtual Display app with `fork_virtual_display_app_extends`: the client's screen
+    /// goes next to the PC's displays, which stay on (fork/vdisplay_extend.h)
+    bool extends_desktop() const;
+    void configure_launch_display(const rtsp_stream::launch_session_t &session);
+
     bool setup_virtual_display(const vdisplay_mode::display_mode_t &mode, const std::optional<client_display::screen_t> &screen, const GUID &guid, bool apply_mode);
     void apply_virtual_display_hdr(const std::string &display, bool enable_hdr, bool record_initial);
 #endif

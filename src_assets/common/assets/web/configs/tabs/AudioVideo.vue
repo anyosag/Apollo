@@ -170,6 +170,15 @@ const validateFallbackMode = (event) => {
               v-if="platform === 'windows'"
     ></Checkbox>
 
+    <!-- [fork] The Virtual Display app extends the desktop -->
+    <Checkbox class="mb-3"
+              id="fork_virtual_display_app_extends"
+              locale-prefix="config"
+              v-model="config.fork_virtual_display_app_extends"
+              default="true"
+              v-if="platform === 'windows'"
+    ></Checkbox>
+
     <!-- LuzVDA Driver Status -->
     <div class="alert" :class="[vdisplay ? 'alert-warning' : 'alert-success']" v-if="platform === 'windows'">
       <i class="fa-solid fa-xl fa-circle-info"></i> LuzVDA virtual display driver status: {{currentDriverStatus}}

@@ -52,6 +52,8 @@ namespace VDISPLAY {
 	// [fork] Gives a display new modes; Windows only offers those it also had when it arrived
 	bool updateVirtualDisplayModes(const LUZVDA_UPDATE_MODES& update);
 	bool removeVirtualDisplay(const GUID& guid);
+	// [fork] The GDI name the display with this GUID has now, or an empty name
+	std::wstring getVirtualDisplayName(const GUID& guid);
 	// [fork] Removes every display the driver has; returns how many
 	int removeAllVirtualDisplays();
 }

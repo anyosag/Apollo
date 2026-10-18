@@ -19,6 +19,11 @@ namespace fork_tweaks {
   /// addresses `origin_web_ui_allowed` allows), not only from this PC.
   inline bool web_ui_remote_first_setup = false;
 
+  /// `fork_virtual_display_app_extends`: the Virtual Display app adds the client's screen next to the
+  /// PC's displays, which stay on, instead of in their place. Other apps keep the configured display
+  /// configuration (e.g. `ensure_only_display`).
+  inline bool virtual_display_app_extends = true;
+
   /**
    * @brief Read the fork-only options and remove them from @p vars, so they aren't reported as unrecognized.
    * @param vars The parsed sunshine.conf options.
