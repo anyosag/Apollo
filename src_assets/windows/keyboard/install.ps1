@@ -63,18 +63,21 @@ $key = "$layouts\$klid"
 $id = $null
 if (Test-Path $key) {
   $id = (Get-Item $key).GetValue('Layout Id')
-} else {
-  New-Item $key | Out-Null
 }
 if (-not $id) {
   $used = Get-ChildItem $layouts | ForEach-Object { $_.GetValue('Layout Id') } |
     Where-Object { $_ -match '^[0-9a-fA-F]{1,4}$' } | ForEach-Object { [Convert]::ToInt32($_, 16) }
-  $id = '{0:x4}' -f (($used | Measure-Object -Maximum).Maximum + 1)
+  # Measure-Object's maximum is a double, and nothing when no layout has an id
+  $id = '{0:x4}' -f ([int]($used | Measure-Object -Maximum).Maximum + 1)
 }
 
-Set-ItemProperty $key 'Layout File' $file
+if (-not (Test-Path $key)) {
+  New-Item $key | Out-Null
+}
 Set-ItemProperty $key 'Layout Text' 'US - Mac'
 Set-ItemProperty $key 'Layout Display Name' "@%SystemRoot%\system32\$file,-1000"
 Set-ItemProperty $key 'Layout Id' $id
+# Last, since later installs find the key by it
+Set-ItemProperty $key 'Layout File' $file
 
 Write-Host "US - Mac is keyboard layout $klid (Layout Id $id). Add it in Settings > Time & language > Language & region."
