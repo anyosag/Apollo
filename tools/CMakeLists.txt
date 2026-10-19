@@ -28,3 +28,15 @@ target_link_libraries(sunshinesvc
         wtsapi32
         ${PLATFORM_LIBRARIES})
 target_compile_options(sunshinesvc PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
+# [fork] Installs over-the-air updates (src/fork/updater.cpp starts it)
+add_executable(apollo-updater apollo-updater.cpp)
+set_target_properties(apollo-updater PROPERTIES CXX_STANDARD 23)
+target_link_libraries(apollo-updater
+        ${CMAKE_THREAD_LIBS_INIT}
+        advapi32
+        bcrypt
+        shell32
+        ws2_32
+        ${PLATFORM_LIBRARIES})
+target_compile_options(apollo-updater PRIVATE ${SUNSHINE_COMPILE_OPTIONS})

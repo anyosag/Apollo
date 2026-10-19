@@ -43,5 +43,6 @@ namespace fork_tweaks {
     bool_option(vars, "fork_ios_touch", ios_touch);
     bool_option(vars, "fork_ios_tablet_posture", ios_tablet_posture);
     bool_option(vars, "fork_touchpad_passthrough", touchpad_passthrough);
+    bool_option(vars, "fork_auto_update", auto_update);
   }
 }  // namespace fork_tweaks

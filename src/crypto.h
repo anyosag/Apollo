@@ -59,7 +59,9 @@ namespace crypto {
     file_upload      = _operation << 2,  // Allow upload files to host
     file_dwnload     = _operation << 3,  // Allow download files from host
     server_cmd       = _operation << 4,  // Allow execute server cmd
-    _all_opeiations  = clipboard_set | clipboard_read | file_upload | file_dwnload | server_cmd,
+    host_update      = _operation << 5,  // [fork] Allow updating Apollo (src/fork/updater.h)
+    _all_opeiations  = clipboard_set | clipboard_read | file_upload | file_dwnload | server_cmd | host_update,
+    _all_before_host_update = 0x071F1F00,  // [fork] _all before host_update; clients with it get host_update too
 
     _action          = _operation << 8,  // Action permission group
     list             = _action << 0,     // Allow list apps

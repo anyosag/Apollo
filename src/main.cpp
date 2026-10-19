@@ -13,6 +13,7 @@
 #include "display_device.h"
 #include "entry_handler.h"
 #include "fork/tablet_posture.h"  // [fork]
+#include "fork/updater.h"  // [fork]
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
@@ -437,6 +438,9 @@ int main(int argc, char *argv[]) {
   std::thread configThread {confighttp::start};
   std::thread rtspThread {rtsp_stream::start};
 
+  // [fork] Over-the-air updates; also tells an install helper waiting on this build that it's up
+  fork_tweaks::updater::start();
+
 #ifdef _WIN32
   // If we're using the default port and GameStream is enabled, warn the user
   if (config::sunshine.port == 47989 && is_gamestream_enabled()) {
@@ -467,6 +471,7 @@ int main(int argc, char *argv[]) {
   httpThread.join();
   configThread.join();
   rtspThread.join();
+  fork_tweaks::updater::stop();  // [fork]
 
   task_pool.stop();
   task_pool.join();

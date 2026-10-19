@@ -31,6 +31,7 @@
 #include "display_device.h"
 #include "file_handler.h"
 #include "fork/fork_config.h"  // [fork]
+#include "fork/updater.h"  // [fork]
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
@@ -1029,6 +1030,54 @@ namespace confighttp {
   }
 
   /**
+   * @brief [fork] Over-the-air updates (src/fork/updater.h): the updater's state.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/update| GET| null}
+   */
+  void getUpdate(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+    send_response(response, nlohmann::json::parse(fork_tweaks::updater::status_json()));
+  }
+
+  /**
+   * @brief [fork] Ask the updater to check or install, or turn automatic updates on or off.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/update| POST| {"action":"install","automatic":true}}
+   */
+  void postUpdate(resp_https_t response, req_https_t request) {
+    if (!validateContentType(response, request, "application/json") || !authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    auto body = nlohmann::json::parse(request->content.string(), nullptr, false);
+    if (body.is_discarded() || !body.is_object()) {
+      bad_request(response, request, "Expected a JSON object");
+      return;
+    }
+    std::string action = body.contains("action") && body["action"].is_string() ? body["action"].get<std::string>() : "";
+    std::optional<bool> automatic;
+    if (body.contains("automatic") && body["automatic"].is_boolean()) {
+      automatic = body["automatic"].get<bool>();
+    }
+    std::string error;
+    if (!fork_tweaks::updater::request(action, automatic, &error)) {
+      bad_request(response, request, error);
+      return;
+    }
+    send_response(response, nlohmann::json::parse(fork_tweaks::updater::status_json()));
+  }
+
+  /**
    * @brief Get the configuration settings.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -1616,6 +1665,8 @@ namespace confighttp {
     server.resource["^/api/config$"]["POST"] = saveConfig;
     server.resource["^/api/configLocale$"]["GET"] = getLocale;
     server.resource["^/api/restart$"]["POST"] = restart;
+    server.resource["^/api/update$"]["GET"] = getUpdate;  // [fork]
+    server.resource["^/api/update$"]["POST"] = postUpdate;  // [fork]
     server.resource["^/api/quit$"]["POST"] = quit;
     server.resource["^/api/reset-display-device-persistence$"]["POST"] = resetDisplayDevicePersistence;
     server.resource["^/api/password$"]["POST"] = savePassword;

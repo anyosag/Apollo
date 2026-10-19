@@ -460,9 +460,11 @@ namespace rtsp_stream {
       boost::system::error_code endpoint_ec;
       auto peer = socket->sock.remote_endpoint(endpoint_ec);
       auto peer_address = endpoint_ec ? std::string() : net::addr_to_normalized_string(peer.address());
-      if (launch_session && !launch_session->client_address.empty() && peer_address != launch_session->client_address) {
-        // Only the client that launched may take the pending session; anyone else connecting first
-        // would get its stream configuration (and, without encrypted RTSP, its stream)
+      if (launch_session && !launch_session->rtsp_cipher && !launch_session->client_address.empty() && peer_address != launch_session->client_address) {
+        // Without encrypted RTSP, only the client that launched may take the pending session; anyone else
+        // connecting first would get its stream configuration and its stream. Encrypted RTSP already ties
+        // the session to the launching client's key, and carrier-grade NAT (mobile data) can give that
+        // client's RTSP connection a different public address than its launch request
         BOOST_LOG(warning) << "RTSP connection from ["sv << peer_address << "] isn't the client that launched the session ["sv
                            << launch_session->client_address << "]; closing it"sv;
 

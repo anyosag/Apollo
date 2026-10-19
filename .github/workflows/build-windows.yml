@@ -32,6 +32,8 @@ jobs:
       contents: read
       id-token: write  # sign the build provenance
       attestations: write  # store it
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
@@ -47,15 +49,26 @@ jobs:
 
       # Version is the latest upstream release plus the number of commits since it,
       # e.g. 0.4.8.26, so Apollo's update check compares correctly against upstream releases.
+      # The run number orders builds for over-the-air updates (src/fork/updater.cpp); only a push to
+      # master is a master build, which updates may replace by themselves and the publish job releases.
       - name: Determine version
+        id: version
         shell: bash
+        env:
+          FORK_BUILD_RUN: ${{ github.run_number }}
+          IS_MASTER_PUSH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
         run: |
           git fetch --quiet --tags https://github.com/ClassicOldSong/Apollo.git
           tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*')
           version="${tag#v}.$(git rev-list --count "$tag..HEAD")"
-          echo "Building version $version"
+          channel=branch
+          if [ "$IS_MASTER_PUSH" = true ]; then channel=master; fi
+          echo "Building version $version, run $FORK_BUILD_RUN ($channel)"
           echo "BUILD_VERSION=$version" >> "$GITHUB_ENV"
           echo "COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "FORK_BUILD_RUN=$FORK_BUILD_RUN" >> "$GITHUB_ENV"
+          echo "FORK_BUILD_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       # The LuzVDA virtual display driver (anyosag/LuzVDA). Its CI builds it unsigned; its owner signs it on
       # their own PC and publishes the signed zip as a release. The source tree has only install.bat,
@@ -230,3 +243,106 @@ jobs:
           name: Apollo-touchpad-smoke-${{ env.BUILD_VERSION }}
           path: touchpad_win_smoke.exe
           if-no-files-found: warn
+
+  # Over-the-air updates (FORK.md, "Updates"): each master build becomes a GitHub release with an
+  # update.json that Apollo checks against the public key in src/fork/update_key.h. The signing key
+  # is the FORK_UPDATE_KEY secret of the `release` environment, which only master may use.
+  publish:
+    name: Publish update
+    needs: build_windows
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write  # create the release
+    concurrency:
+      group: publish-update
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          sparse-checkout: src/fork/update_key.h
+          sparse-checkout-cone-mode: false
+
+      - name: Download the build
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5.0.0
+        with:
+          name: Apollo-windows-${{ needs.build_windows.outputs.version }}
+          path: artifacts
+
+      - name: Write and sign update.json
+        id: sign
+        env:
+          FORK_UPDATE_KEY: ${{ secrets.FORK_UPDATE_KEY }}
+          RUN: ${{ github.run_number }}
+          VERSION: ${{ needs.build_windows.outputs.version }}
+          COMMIT: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FORK_UPDATE_KEY" ]; then
+            echo "::warning::The release environment has no FORK_UPDATE_KEY secret, so this build isn't published as an update (FORK.md, \"Updates\")"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cd artifacts
+          file=Apollo-windows-installer.exe
+          tag="apollo-b$RUN"
+          notes="${HEAD_MESSAGE%%$'\n'*}"
+          notes="${notes:0:500}"
+          jq -n \
+            --argjson run "$RUN" --arg version "$VERSION" --arg commit "$COMMIT" \
+            --arg published "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg notes "$notes" \
+            --arg name "$file" --arg url "https://github.com/$REPO/releases/download/$tag/$file" \
+            --arg sha256 "$(sha256sum "$file" | cut -d' ' -f1)" --argjson size "$(stat -c %s "$file")" \
+            '{product: "apollo", channel: "master", run: $run, version: $version, commit: $commit,
+              published: $published, notes: $notes,
+              asset: {name: $name, url: $url, sha256: $sha256, size: $size}}' > update.json
+          cat update.json
+
+          key="$RUNNER_TEMP/update-key.pem"
+          (umask 077; printf '%s\n' "$FORK_UPDATE_KEY" > "$key")
+          openssl pkeyutl -sign -inkey "$key" -rawin -in update.json -out "$RUNNER_TEMP/update.sig"
+          rm -f "$key"
+          base64 -w0 "$RUNNER_TEMP/update.sig" > update.json.sig
+
+          # The secret must match the public key Apollo has, or every Apollo would refuse this update
+          hex=$(grep -o '0x[0-9a-f][0-9a-f]' ../src/fork/update_key.h | head -n 32 | sed 's/0x//' | tr -d '\n')
+          { echo '-----BEGIN PUBLIC KEY-----'; echo "302a300506032b6570032100$hex" | xxd -r -p | base64; echo '-----END PUBLIC KEY-----'; } > "$RUNNER_TEMP/update-pub.pem"
+          openssl pkeyutl -verify -pubin -inkey "$RUNNER_TEMP/update-pub.pem" -rawin -in update.json -sigfile "$RUNNER_TEMP/update.sig"
+
+          {
+            echo "publish=true"
+            echo "tag=$tag"
+            echo "notes=$notes"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create the release
+        if: steps.sign.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.sign.outputs.tag }}
+          NOTES: ${{ steps.sign.outputs.notes }}
+          VERSION: ${{ needs.build_windows.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          files=(Apollo-windows-installer.exe Apollo-windows-portable.zip SHA256SUMS.txt update.json update.json.sig)
+          if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$REPO" --clobber "${files[@]}"
+          else
+            gh release create "$TAG" --repo "$REPO" --target "$COMMIT" --title "Apollo $VERSION" \
+              --notes "$NOTES" --latest "${files[@]}"
+          fi
+
+          # Keep the newest 15 updates; older ones are no longer needed to roll back to
+          gh release list --repo "$REPO" --limit 200 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("apollo-b"))] | sort_by(.createdAt) | reverse | .[15:] | .[].tagName' |
+          while read -r old; do
+            echo "Removing $old"
+            gh release delete "$old" --repo "$REPO" --yes --cleanup-tag
+          done
