@@ -24,6 +24,8 @@ extern "C" {
 #include "fork/fork_config.h"  // [fork]
 #include "fork/tablet_posture.h"  // [fork]
 #include "fork/touch_emulation.h"  // [fork]
+#include "fork/touch_keyboard.h"  // [fork]
+#include "fork/touch_keyboard_policy.h"  // [fork]
 #include "globals.h"
 #include "input.h"
 #include "input_validation.h"
@@ -168,6 +170,9 @@ namespace input {
     bool touched = false;  ///< A finger has become touch
     thread_pool_util::ThreadPool::task_id_t expire_task {};  ///< Lifts a finger whose right release doesn't come
     std::unique_ptr<fork_tweaks::tablet_posture::hold_t> posture;
+    touch_keyboard_policy::tap_tracker_t taps;  ///< Which fingers were taps, for the touch keyboard
+    std::unique_ptr<fork_tweaks::touch_keyboard::hold_t> keyboard;
+    std::optional<std::chrono::steady_clock::time_point> last_key;  ///< The client's last key, for a keyboard hold made after it
   };
 
   struct input_t {
@@ -553,6 +558,7 @@ namespace input {
   bool fork_touch_apply(std::shared_ptr<input_t> &input, const touch_emulation::steps_t &steps) {
     using step_t = touch_emulation::step_t;
     auto &fork_touch = *input->fork_touch;
+    auto now = std::chrono::steady_clock::now();
 
     bool pass = false;
     bool touch_down = false;
@@ -609,6 +615,24 @@ namespace input {
         0.0f,
       };
       platf::touch_update(input->client_context.get(), abs_port, touch);
+
+      // A tap may have landed in a text field: the touch keyboard's helper looks
+      switch (step.kind) {
+        case step_t::touch_down:
+          fork_touch.taps.down(step.at.x, step.at.y, now);
+          break;
+        case step_t::touch_move:
+          fork_touch.taps.move(step.at.x, step.at.y);
+          break;
+        case step_t::touch_up:
+          if (fork_touch.taps.up(now) && fork_touch.keyboard) {
+            fork_touch.keyboard->tapped();
+          }
+          break;
+        default:
+          fork_touch.taps.cancel();
+          break;
+      }
     }
 
     // A finger's left release waits for the client's right button event; should it not come, the finger lifts then
@@ -628,6 +652,13 @@ namespace input {
       BOOST_LOG(info) << "fork: client ["sv << fork_touch.device_name << "] touches in Moonlight's Touchscreen mode; its fingers reach Windows as touch"sv;
       if (fork_tweaks::ios_tablet_posture) {
         fork_touch.posture = std::make_unique<fork_tweaks::tablet_posture::hold_t>(fork_touch.device_name);
+      }
+      if (fork_tweaks::ios_touch_keyboard) {
+        fork_touch.keyboard = std::make_unique<fork_tweaks::touch_keyboard::hold_t>(fork_touch.device_name);
+        // Typing before the first finger keeps the keyboard away too
+        if (fork_touch.last_key && now - *fork_touch.last_key < touch_keyboard_policy::key_quiet) {
+          fork_touch.keyboard->typed();
+        }
       }
     }
 
@@ -853,6 +884,30 @@ namespace input {
     key_press_repeat_id = task_pool.pushDelayed(repeat_key, config::input.key_repeat_period, key_code, flags, synthetic_modifiers).task_id;
   }
 
+  /**
+   * @brief [fork] A key or text from stock Moonlight for iOS: a hardware keyboard or the iOS keyboard
+   * is in use, so the touch keyboard closes and stays away for a while (fork/touch_keyboard.h).
+   * @param input The input context.
+   * @param key_code The key going down, or 0 for text.
+   */
+  void fork_touch_typed(std::shared_ptr<input_t> &input, uint16_t key_code) {
+    if (!input->fork_touch) {
+      return;
+    }
+
+    // Modifiers (Moonlight's toolbar toggles them), Windows (Cmd), Caps Lock and Escape (the Globe key) aren't typing
+    constexpr uint16_t lwin = 0x5B, rwin = 0x5C, caps_lock = 0x14, escape = 0x1B;
+    if (key_code && (is_modifier(key_code) || key_code == lwin || key_code == rwin || key_code == caps_lock || key_code == escape)) {
+      return;
+    }
+
+    auto &fork_touch = *input->fork_touch;
+    fork_touch.last_key = std::chrono::steady_clock::now();
+    if (fork_touch.keyboard) {
+      fork_touch.keyboard->typed();
+    }
+  }
+
   void passthrough(std::shared_ptr<input_t> &input, PNV_KEYBOARD_PACKET packet) {
     if (!config::input.keyboard) {
       return;
@@ -884,6 +939,8 @@ namespace input {
         if (input->shortcutFlags == input_t::SHORTCUT && apply_shortcut(keyCode) > 0) {
           return;
         }
+
+        fork_touch_typed(input, keyCode);  // [fork]
 
         if (key_press_repeat_id) {
           task_pool.cancel(key_press_repeat_id);
@@ -1713,6 +1770,9 @@ namespace input {
         break;
       case UTF8_TEXT_EVENT_MAGIC:
         passthrough((PNV_UNICODE_PACKET) payload);
+        if (config::input.keyboard) {
+          fork_touch_typed(input, 0);  // [fork]
+        }
         break;
       case MULTI_CONTROLLER_MAGIC_GEN5:
         passthrough(input, (PNV_MULTI_CONTROLLER_PACKET) payload);
@@ -1845,6 +1905,7 @@ namespace input {
                         << " fingers as touch, of them "sv << counts.long_presses << " long presses as right clicks; "sv
                         << counts.mouse_clicks << " left clicks as mouse"sv;
         fork_touch.posture.reset();
+        fork_touch.keyboard.reset();
       });
     }
 
