@@ -26,6 +26,7 @@ extern "C" {
 #include "display_device.h"
 #include "fork/fork_config.h"
 #include "fork/frame_loss.h"
+#include "fork/luztouchpad.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -432,6 +433,9 @@ namespace stream {
 
     /// [fork] Stock Moonlight for iOS: its Touchscreen mode's fingers become touch
     bool moonlight_ios = false;
+
+    /// [fork] LuzLunar asked for its Mac trackpad mode
+    bool mac_trackpad = false;
   };
 
   /**
@@ -2138,6 +2142,13 @@ namespace stream {
         input::enable_touch_emulation(session.input, session.device_name);
       }
 
+      // [fork] LuzLunar's Mac trackpad mode, when it asked and this host offers it in the features
+      // (platform/windows/input.cpp), if it may use the mouse
+      if (session.mac_trackpad && ((std::uint32_t) platf::get_capabilities() & luztouchpad::k_host_mac_trackpad_flag) &&
+          (session.permission & crypto::PERM::input_mouse) != crypto::PERM::_no) {
+        input::enable_mac_trackpad(session.input, session.device_name);
+      }
+
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
         return -1;
@@ -2205,6 +2216,7 @@ namespace stream {
       session->device_uuid = launch_session.unique_id;
       session->permission = launch_session.perm;
       session->moonlight_ios = launch_session.moonlight_ios;  // [fork]
+      session->mac_trackpad = launch_session.mac_trackpad;  // [fork]
 
       session->do_cmds = std::move(launch_session.client_do_cmds);
       session->undo_cmds = std::move(launch_session.client_undo_cmds);

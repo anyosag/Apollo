@@ -35,6 +35,7 @@ extern "C" {
 #include "utility.h"
 
 // [fork] trackpad passthrough
+#include "fork/pointer_speed.h"
 #ifdef _WIN32
   #include "fork/touchpad_win.h"
 #endif
@@ -219,6 +220,11 @@ namespace input {
 
     /// [fork] Only for stock Moonlight for iOS (enable_touch_emulation())
     std::unique_ptr<fork_touch_t> fork_touch;
+
+    /// [fork] LuzLunar's Mac trackpad mode (enable_mac_trackpad()): a gesture-only touchpad, and
+    /// Windows' pointer acceleration off while the stream runs
+    bool fork_mac_trackpad = false;
+    std::unique_ptr<fork_tweaks::pointer_speed::hold_t> fork_pointer_hold;
   };
 
   /**
@@ -668,6 +674,11 @@ namespace input {
   void enable_touch_emulation(std::shared_ptr<input_t> &input, const std::string &device_name) {
     input->fork_touch = std::make_unique<fork_touch_t>();
     input->fork_touch->device_name = device_name;
+  }
+
+  void enable_mac_trackpad(std::shared_ptr<input_t> &input, const std::string &device_name) {
+    input->fork_mac_trackpad = true;
+    input->fork_pointer_hold = std::make_unique<fork_tweaks::pointer_speed::hold_t>(device_name);
   }
 
   void passthrough(std::shared_ptr<input_t> &input, PNV_ABS_MOUSE_MOVE_PACKET packet) {
@@ -1142,7 +1153,7 @@ namespace input {
       BOOST_LOG(debug) << "fork: dropping a malformed trackpad frame"sv;
       return;
     }
-    platf::touchpad_frame(input->client_context.get(), frame);
+    platf::touchpad_frame(input->client_context.get(), frame, input->fork_mac_trackpad);
   }
 #endif
 
@@ -1934,6 +1945,11 @@ namespace input {
       platf::touchpad_cancel(input->client_context.get());
     });
 #endif
+
+    // [fork] Mac trackpad mode: Windows' pointer settings go back once the last such stream ends
+    task_pool.push([input]() {
+      input->fork_pointer_hold.reset();
+    });
   }
 
   class deinit_t: public platf::deinit_t {

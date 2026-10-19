@@ -12,6 +12,7 @@
 #include "confighttp.h"
 #include "display_device.h"
 #include "entry_handler.h"
+#include "fork/pointer_speed.h"  // [fork]
 #include "fork/tablet_posture.h"  // [fork]
 #include "fork/updater.h"  // [fork]
 #include "globals.h"
@@ -211,8 +212,10 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(error) << "Display device session failed to initialize"sv;
   }
 
-  // [fork] Puts back the tablet posture a run that stopped while a client touched left on
+  // [fork] Puts back the tablet posture a run that stopped while a client touched left on, and the
+  // pointer settings one that stopped during a Mac trackpad stream left unaccelerated
   fork_tweaks::tablet_posture::recover();
+  fork_tweaks::pointer_speed::recover();
 
 #ifdef _WIN32
   // Modify relevant NVIDIA control panel settings if the system has corresponding gpu

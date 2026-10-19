@@ -31,7 +31,7 @@ namespace fork_touchpad::win {
   enum creation_option_e : ULONG {
     sdco_none = 0x0,
     sdco_physical_size = 0x1,  ///< Positions are on the device (ptHimetricLocation), not the screen
-    sdco_touchpad_gesture_only = 0x2,  ///< Never move the pointer or click; not used, so input acts like a real touchpad
+    sdco_touchpad_gesture_only = 0x2,  ///< Never move the pointer or click: Mac trackpad mode's, where macOS points
   };
 
   /// `SYNTHETIC_DEVICE_CREATION_PARAMS`
@@ -101,8 +101,8 @@ namespace fork_touchpad::win {
     return p;
   }
 
-  /// The parameters for a touchpad of 5 contacts, @p width by @p height himetric
-  inline creation_params_t touchpad_params(ULONG width, ULONG height) {
+  /// The parameters for a touchpad of 5 contacts, @p width by @p height himetric; @p gesture_only for one that only makes gestures
+  inline creation_params_t touchpad_params(ULONG width, ULONG height, bool gesture_only = false) {
     creation_params_t p {};
     p.pointerType = pt_touchpad;
     p.maxCount = 5;
@@ -110,7 +110,7 @@ namespace fork_touchpad::win {
     p.hMonitor = nullptr;  // A touchpad follows the mouse pointer, on whichever display it is
     p.deviceWidth = width;
     p.deviceHeight = height;
-    p.options = sdco_physical_size;
+    p.options = sdco_physical_size | (gesture_only ? sdco_touchpad_gesture_only : sdco_none);
     return p;
   }
 }  // namespace fork_touchpad::win

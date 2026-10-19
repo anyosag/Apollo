@@ -715,10 +715,10 @@ namespace platf {
   }
 
   // [fork] Trackpad passthrough, next to the client's other synthetic devices
-  void touchpad_frame(client_input_t *input, const luztouchpad::frame &frame) {
+  void touchpad_frame(client_input_t *input, const luztouchpad::frame &frame, bool gesture_only) {
     auto raw = (client_input_raw_t *) input;
     if (!raw->touchpad) {
-      raw->touchpad = fork_touchpad::make_session();
+      raw->touchpad = fork_touchpad::make_session(gesture_only);
     }
     fork_touchpad::frame(raw->touchpad, frame);
   }
@@ -1800,9 +1800,13 @@ namespace platf {
       BOOST_LOG(warning) << "Touch input requires Windows 10 1809 or later"sv;
     }
 
-    // [fork] LuzLunar's trackpad passthrough, when Windows makes synthetic touchpads (src/fork/touchpad_win.*)
+    // [fork] LuzLunar's trackpad passthrough, when Windows makes synthetic touchpads (src/fork/touchpad_win.*),
+    // and its Mac trackpad mode (a gesture-only touchpad, and the pointer unaccelerated: src/fork/pointer_speed.*)
     if (config::input.mouse && fork_tweaks::touchpad_passthrough && fork_touchpad::available()) {
       caps |= luztouchpad::k_host_feature_flag;
+      if (fork_tweaks::trackpad_mac) {
+        caps |= luztouchpad::k_host_mac_trackpad_flag;
+      }
     }
 
     return caps;

@@ -5,6 +5,9 @@
 // on a PC you're watching. Taps and clicks press whatever is under the pointer, so they only run
 // with --clicks. Without the API, or when Windows won't make the device (CI runners), it says so
 // and passes; with --strict, anything that doesn't work fails it.
+//
+// --gesture-only plays them on gesture-only touchpads, as LuzLunar's Mac trackpad mode gets: one
+// finger must leave the pointer where it is, while the swipes still open and close Task View.
 //   g++ -std=c++17 -Isrc/fork tests/fork/touchpad_win_smoke.cpp -luser32 -o touchpad_win_smoke
 //
 // To try Apollo's own context, run it as SYSTEM in your session (Sysinternals PsExec):
@@ -51,6 +54,7 @@ namespace {
   LARGE_INTEGER s_frequency;
   LARGE_INTEGER s_base_counter;
   ULONGLONG s_base_tick;
+  bool s_gesture_only = false;
 
   std::int64_t now_us() {
     LARGE_INTEGER counter;
@@ -71,7 +75,7 @@ namespace {
 
     explicit player_t(timing_e t = timing_e::tick_only):
         timing(t) {
-      auto params = win::touchpad_params(k_width, k_height);
+      auto params = win::touchpad_params(k_width, k_height, s_gesture_only);
       device = win::api().create(&params);
       host.set_device_size(k_width, k_height);
     }
@@ -238,6 +242,8 @@ int main(int argc, char **argv) {
       strict = true;
     } else if (std::strcmp(argv[i], "--clicks") == 0) {
       clicks = true;
+    } else if (std::strcmp(argv[i], "--gesture-only") == 0) {
+      s_gesture_only = true;
     }
   }
 
@@ -252,15 +258,17 @@ int main(int argc, char **argv) {
   }
 
   {
-    auto params = win::touchpad_params(k_width, k_height);
+    auto params = win::touchpad_params(k_width, k_height, s_gesture_only);
     HSYNTHETICPOINTERDEVICE device = api.create(&params);
     if (!device) {
-      std::printf("touchpad_win_smoke: skipped, Windows wouldn't make a synthetic touchpad (error %lu)\n", GetLastError());
+      std::printf("touchpad_win_smoke: skipped, Windows wouldn't make a synthetic%s touchpad (error %lu)\n",
+                  s_gesture_only ? " gesture-only" : "", GetLastError());
       return strict ? 1 : 0;
     }
     api.destroy(device);
   }
-  std::printf("Windows makes %.0f x %.0f mm synthetic touchpads; each test below gets its own\n", k_width / 100.0, k_height / 100.0);
+  std::printf("Windows makes %.0f x %.0f mm synthetic%s touchpads; each test below gets its own\n", k_width / 100.0, k_height / 100.0,
+              s_gesture_only ? " gesture-only" : "");
 
   int problems = 0;
   auto report = [&](const char *what, const player_t &p, long moved = -1) {
@@ -280,13 +288,18 @@ int main(int argc, char **argv) {
     player_t p(t);
     long moved = one_finger_move(p);
     report(name(t), p, moved);
-    if (t == timing_e::tick_only && (p.failures > 0 || moved == 0)) {
+    // A gesture-only touchpad must leave the pointer to macOS
+    if (t == timing_e::tick_only && (p.failures > 0 || (s_gesture_only ? moved != 0 : moved == 0))) {
       problems++;
     }
   }
 
   std::printf("Held fingers, then moved:\n");
   for (bool keepalive : {false, true}) {
+    if (s_gesture_only) {
+      std::printf("  (skipped: a gesture-only touchpad moves no pointer)\n");
+      break;
+    }
     for (int hold : {500, 1200, 2500}) {
       center_pointer();
       player_t p;
