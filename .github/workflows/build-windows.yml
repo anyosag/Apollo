@@ -40,7 +40,15 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
-          submodules: recursive
+
+      # Every submodule but the Linux-only Wayland protocols, which Windows doesn't build. Their host,
+      # gitlab.freedesktop.org, sometimes times out and failed the checkout.
+      - name: Checkout submodules
+        shell: bash
+        run: |
+          git config submodule.third-party/wayland-protocols.update none
+          git config submodule.third-party/wlr-protocols.update none
+          git submodule update --init --recursive
 
       # Fixes the fork carries in submodules it doesn't own (patches/, see FORK.md)
       - name: Apply submodule patches
