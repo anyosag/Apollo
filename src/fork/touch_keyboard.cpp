@@ -198,7 +198,7 @@ namespace fork_tweaks::touch_keyboard {
         DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | CREATE_BREAKAWAY_FROM_JOB;
         PROCESS_INFORMATION process {};
         BOOL ok = FALSE;
-        DWORD error = 0;
+        DWORD launch_error = 0;
         for (int attempt = 0; attempt < 2 && !ok; attempt++) {
           if (platf::is_running_as_system()) {
             HANDLE token = platf::retrieve_users_token(false);
@@ -210,17 +210,17 @@ namespace fork_tweaks::touch_keyboard {
             void *environment = nullptr;
             CreateEnvironmentBlock(&environment, token, FALSE);
             ok = CreateProcessAsUserW(token, path.c_str(), command.data(), nullptr, nullptr, TRUE, flags, environment, dir.c_str(), &startup.StartupInfo, &process);
-            error = GetLastError();
+            launch_error = GetLastError();
             if (environment) {
               DestroyEnvironmentBlock(environment);
             }
             CloseHandle(token);
           } else {
             ok = CreateProcessW(path.c_str(), command.data(), nullptr, nullptr, TRUE, flags & ~CREATE_UNICODE_ENVIRONMENT, nullptr, dir.c_str(), &startup.StartupInfo, &process);
-            error = GetLastError();
+            launch_error = GetLastError();
           }
           // A job that doesn't allow leaving it: the helper stays in it
-          if (!ok && error == ERROR_ACCESS_DENIED && (flags & CREATE_BREAKAWAY_FROM_JOB)) {
+          if (!ok && launch_error == ERROR_ACCESS_DENIED && (flags & CREATE_BREAKAWAY_FROM_JOB)) {
             flags &= ~CREATE_BREAKAWAY_FROM_JOB;
             continue;
           }
@@ -229,7 +229,7 @@ namespace fork_tweaks::touch_keyboard {
         platf::free_proc_thread_attr_list(list);
 
         if (!ok) {
-          BOOST_LOG(error) << "fork: touch keyboard: couldn't start "sv << path.string() << ": error "sv << error;
+          BOOST_LOG(error) << "fork: touch keyboard: couldn't start "sv << path.string() << ": error "sv << launch_error;
           return false;
         }
         CloseHandle(process.hThread);
