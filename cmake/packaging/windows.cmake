@@ -35,6 +35,11 @@ install(TARGETS apollo-touch-keyboard RUNTIME DESTINATION "tools" COMPONENT appl
 install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/drivers/luzvda"
         DESTINATION "drivers"
         COMPONENT luzvda)
+# [fork] The "US - Mac" keyboard layout (src/fork/keyboard_layout/): its scripts from the source tree,
+# its DLLs from build-windows.yml (scripts/fork/build-keyboard-layout.ps1)
+install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/keyboard"
+        DESTINATION "drivers"
+        COMPONENT keyboard)
 
 # Mandatory scripts
 install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/service/"
@@ -106,6 +111,11 @@ set(CPACK_COMPONENT_LUZVDA_DISPLAY_NAME "LuzVDA")
 set(CPACK_COMPONENT_LUZVDA_DESCRIPTION "Driver required for Virtual Display to function. Replaces SudoVDA.")
 set(CPACK_COMPONENT_LUZVDA_GROUP "Drivers")
 set(CPACK_COMPONENT_LUZVDA_REQUIRED true)
+
+# [fork] keyboard layout
+set(CPACK_COMPONENT_KEYBOARD_DISPLAY_NAME "US - Mac keyboard layout")
+set(CPACK_COMPONENT_KEYBOARD_DESCRIPTION "US with the Mac's Option characters on Right Alt, for typing from LuzLunar. Add it in Settings afterwards.")
+set(CPACK_COMPONENT_KEYBOARD_GROUP "Drivers")
 
 # audio tool
 set(CPACK_COMPONENT_AUDIO_DISPLAY_NAME "audio-info")

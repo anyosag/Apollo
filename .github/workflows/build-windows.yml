@@ -41,6 +41,64 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
+      # The "US - Mac" keyboard layout (FORK.md, "Keyboard layout for LuzLunar"), built with Visual Studio into
+      # src_assets/windows/keyboard/ for the installer. Before the long steps, so a broken one fails fast.
+      - name: Build the keyboard layout
+        shell: pwsh
+        run: scripts/fork/build-keyboard-layout.ps1 -TestDir "$env:RUNNER_TEMP\keyboard-tests"
+
+      # Reads both DLLs' tables; installs the layout with the installer's script, from 32-bit PowerShell as
+      # the installer starts it; checks it through Windows against the runner's US layout; installs again;
+      # and removes it with the uninstaller's script after adding it to the runner's keyboards.
+      - name: Keyboard layout tests
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tests = "$env:RUNNER_TEMP\keyboard-tests"
+          $layout = 'src_assets\windows\keyboard'
+          $layouts = 'HKLM:\SYSTEM\CurrentControlSet\Control\Keyboard Layouts'
+          $powershell32 = "$env:SystemRoot\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
+          function Invoke-Checked([string]$what, [scriptblock]$command) {
+            & $command
+            if ($LASTEXITCODE -ne 0) { throw "$what failed with exit code $LASTEXITCODE" }
+          }
+          function Get-Registered {
+            @(Get-ChildItem $layouts | Where-Object { $_.GetValue('Layout File') -eq 'kbdluzus.dll' } | ForEach-Object { $_.PSChildName })
+          }
+
+          Invoke-Checked 'The 64-bit tables test' { & "$tests\keyboard_layout_tables_test.exe" "$layout\kbdluzus.dll" }
+          Invoke-Checked 'The WOW64 tables test' { & "$tests\keyboard_layout_tables_test_wow64.exe" "$layout\wow64\kbdluzus.dll" }
+
+          Invoke-Checked 'install.ps1' { & $powershell32 -NoProfile -ExecutionPolicy Bypass -File "$layout\install.ps1" }
+          foreach ($copy in @{ System32 = 'kbdluzus.dll'; SysWOW64 = 'wow64\kbdluzus.dll' }.GetEnumerator()) {
+            if ((Get-FileHash "$env:SystemRoot\$($copy.Key)\kbdluzus.dll").Hash -ne (Get-FileHash "$layout\$($copy.Value)").Hash) {
+              throw "$($copy.Key) doesn't have the built $($copy.Value)"
+            }
+          }
+          $klid = @(Get-Registered)
+          if ($klid.Count -ne 1) { throw "install.ps1 registered $($klid.Count) layouts" }
+          $klid = $klid[0]
+          Get-ItemProperty "$layouts\$klid" | Format-List 'Layout*'
+
+          Invoke-Checked 'The smoke test' { & "$tests\keyboard_layout_win_smoke.exe" $klid }
+
+          Invoke-Checked 'install.ps1 again' { & $powershell32 -NoProfile -ExecutionPolicy Bypass -File "$layout\install.ps1" }
+          $again = @(Get-Registered)
+          if ($again.Count -ne 1 -or $again[0] -ne $klid) { throw "Installing again left $($again -join ', ') instead of $klid" }
+
+          $list = Get-WinUserLanguageList
+          $language = ($list[0].InputMethodTips[0] -split ':')[0]
+          $list[0].InputMethodTips.Add("${language}:$klid")
+          Set-WinUserLanguageList $list -Force
+          if (-not ((Get-WinUserLanguageList).InputMethodTips -like "*:$klid")) { throw "Couldn't add $klid to the runner's keyboards" }
+          Invoke-Checked 'uninstall.ps1' { & $powershell32 -NoProfile -ExecutionPolicy Bypass -File "$layout\uninstall.ps1" }
+          if (Get-Registered) { throw 'uninstall.ps1 left the layout registered' }
+          if ((Get-WinUserLanguageList).InputMethodTips -like "*:$klid") { throw "uninstall.ps1 left $klid on the runner's keyboards" }
+          foreach ($folder in 'System32', 'SysWOW64') {
+            if (Test-Path "$env:SystemRoot\$folder\kbdluzus.dll") { throw "uninstall.ps1 left $folder\kbdluzus.dll" }
+          }
+          "install.ps1 and uninstall.ps1 work; the layout was $klid"
+
       # Every submodule but the Linux-only Wayland protocols, which Windows doesn't build. Their host,
       # gitlab.freedesktop.org, sometimes times out and failed the checkout.
       - name: Checkout submodules
@@ -216,17 +274,19 @@ jobs:
           sha256sum Apollo-windows-installer.exe Apollo-windows-portable.zip > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Check driver is packaged
+      - name: Check drivers are packaged
         shell: pwsh
         run: |
-          $files = 'LuzVDA.inf', 'LuzVDA.dll', 'luzvda.cat', 'luzvda-ctl.exe', 'luzvda.cer', 'install.bat', 'uninstall.bat'
+          $files = 'luzvda\LuzVDA.inf', 'luzvda\LuzVDA.dll', 'luzvda\luzvda.cat', 'luzvda\luzvda-ctl.exe', 'luzvda\luzvda.cer',
+            'luzvda\install.bat', 'luzvda\uninstall.bat',
+            'keyboard\kbdluzus.dll', 'keyboard\wow64\kbdluzus.dll', 'keyboard\install.ps1', 'keyboard\uninstall.ps1'
           foreach ($package in 'Apollo-windows-installer.exe', 'Apollo-windows-portable.zip') {
             $listing = 7z l "artifacts/$package"
             foreach ($file in $files) {
-              if (-not ($listing -match "drivers\\luzvda\\$([regex]::Escape($file))")) { throw "$package is missing drivers\luzvda\$file" }
+              if (-not ($listing -match "drivers\\$([regex]::Escape($file))")) { throw "$package is missing drivers\$file" }
             }
           }
-          "Both packages include the LuzVDA driver: $($files -join ', ')"
+          "Both packages include the LuzVDA driver and the US - Mac keyboard layout: $($files -join ', ')"
 
       # Lets anyone check a downloaded installer came from this workflow:
       #   gh attestation verify Apollo-windows-installer.exe -R anyosag/Apollo

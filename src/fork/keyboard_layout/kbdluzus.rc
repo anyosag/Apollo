@@ -1,0 +1,39 @@
+// The layout's name, which Windows shows through the "Layout Display Name" value
+// (@%SystemRoot%\system32\kbdluzus.dll,-1000) install.ps1 writes, and its version.
+#include <windows.h>
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+STRINGTABLE
+BEGIN
+  1000 "US - Mac"
+END
+
+VS_VERSION_INFO VERSIONINFO
+  FILEVERSION 1, 0, 0, 0
+  PRODUCTVERSION 1, 0, 0, 0
+  FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+  FILEFLAGS 0
+  FILEOS VOS_NT_WINDOWS32
+  FILETYPE VFT_DLL
+  FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "anyosag/Apollo"
+      VALUE "FileDescription", "US - Mac Keyboard Layout"
+      VALUE "FileVersion", "1.0.0.0"
+      VALUE "InternalName", "kbdluzus"
+      VALUE "LegalCopyright", "GPL-3.0"
+      VALUE "OriginalFilename", "kbdluzus.dll"
+      VALUE "ProductName", "Apollo"
+      VALUE "ProductVersion", "1.0.0.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END

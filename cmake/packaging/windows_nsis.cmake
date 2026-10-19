@@ -26,6 +26,10 @@ SET(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
         "${CPACK_NSIS_EXTRA_INSTALL_COMMANDS}
         nsExec::ExecToLog '\\\"$INSTDIR\\\\scripts\\\\update-path.bat\\\" add'
         nsExec::ExecToLog '\\\"$INSTDIR\\\\drivers\\\\luzvda\\\\install.bat\\\"'
+        IfFileExists \\\"$INSTDIR\\\\drivers\\\\keyboard\\\\install.ps1\\\" 0 NoKeyboardLayout
+            nsExec::ExecToLog \
+              'powershell.exe -NoProfile -ExecutionPolicy Bypass -File \\\"$INSTDIR\\\\drivers\\\\keyboard\\\\install.ps1\\\"'
+        NoKeyboardLayout:
         nsExec::ExecToLog '\\\"$INSTDIR\\\\scripts\\\\migrate-config.bat\\\"'
         nsExec::ExecToLog 'icacls \\\"$INSTDIR\\\\config\\\" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F /C /Q'
         nsExec::ExecToLog '\\\"$INSTDIR\\\\scripts\\\\add-firewall-rule.bat\\\"'
@@ -56,6 +60,14 @@ set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
             /SD IDNO IDNO NoLuzVDA
             nsExec::ExecToLog '\\\"$INSTDIR\\\\drivers\\\\luzvda\\\\uninstall.bat\\\"'; skipped if no
         NoLuzVDA:
+        IfFileExists \\\"$INSTDIR\\\\drivers\\\\keyboard\\\\uninstall.ps1\\\" 0 NoKeyboardLayoutRemoval
+        MessageBox MB_YESNO|MB_ICONQUESTION \
+            'Do you want to remove the US - Mac keyboard layout?' \
+            /SD IDNO IDNO NoKeyboardLayoutRemoval
+            nsExec::ExecToLog \
+              'powershell.exe -NoProfile -ExecutionPolicy Bypass -File \
+                \\\"$INSTDIR\\\\drivers\\\\keyboard\\\\uninstall.ps1\\\"'; skipped if no
+        NoKeyboardLayoutRemoval:
         MessageBox MB_YESNO|MB_ICONQUESTION \
             'Do you want to remove $INSTDIR (this includes the configuration, cover images, and settings)?' \
             /SD IDNO IDNO NoDelete
