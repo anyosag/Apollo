@@ -232,6 +232,7 @@ In `sunshine.conf`. `apply_config()` reads them and removes them from the option
   - The installer (the "US - Mac keyboard layout" component) runs `drivers\keyboard\install.ps1`, which copies the DLLs to System32 and SysWOW64 and registers the layout under `HKLM\SYSTEM\CurrentControlSet\Control\Keyboard Layouts\a0000409` (the first free `a###0409`, kept by later installs) with the next free Layout Id. A DLL Windows has loaded is renamed aside, deleted at the next restart, and apps get the new one after signing in again. Over-the-air updates install it the same way.
   - Nobody's keyboards change by themselves. Add it once in Settings › Time & language › Language & region › the language that has the US keyboard › ⋯ › Language options › Add a keyboard › "US - Mac", then remove US, or switch with Win+Space.
   - Uninstalling Apollo asks whether to remove it (no by default, so updates keep it). `uninstall.ps1` takes it off the keyboards of the user running it, unregisters it and deletes the DLLs; other users who added it get their language's default keyboard.
+  - **Untested** on a real PC: typing through a stream, where Apollo injects the client's Right Alt (its E0 38 scan code) and Windows makes it AltGr by pressing Left Ctrl with it, as for any AltGr layout. CI checks the layout through Windows' functions, with AltGr as Ctrl+Alt held, not with injected keys.
 
 ## Tests
 
