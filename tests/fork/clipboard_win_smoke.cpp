@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include <windows.h>
 #include <zlib.h>
@@ -151,6 +152,17 @@ int main() {
   CHECK(write({{"text/plain", "secret"}}, true) != 0);
   snapshot secret;
   CHECK(read(secret) && secret.concealed);
+
+  // Files, as Explorer lists them, with a copy (not a move) asked for
+  std::vector<std::wstring> files = {L"C:\\Users\\Public\\caf\u00e9.txt", L"C:\\Users\\Public\\A folder"};
+  CHECK(write({{"text/plain", "caf\xC3\xA9.txt\nA folder"}}, false, files) != 0);
+  snapshot copied;
+  CHECK(read(copied));
+  CHECK(copied.file_copy);
+  CHECK(copied.files == files);
+  CHECK(has_format(copied, "Preferred DropEffect"));
+  CHECK(find(copied, "text/plain") != nullptr);
+  CHECK(find(copied, "image/png") == nullptr);
 
   if (s_Failures > 0) {
     std::printf("%d check(s) failed\n", s_Failures);

@@ -21,7 +21,8 @@ namespace fork_tweaks::clipboard_win {
   struct snapshot {
     std::uint32_t sequence = 0;  ///< GetClipboardSequenceNumber() before reading, so a change while reading isn't missed
     bool concealed = false;  ///< A password manager marked the content as private
-    bool file_copy = false;  ///< Files copied in Explorer; only their text is read
+    bool file_copy = false;  ///< Files copied in Explorer (CF_HDROP); no image is read
+    std::vector<std::wstring> files;  ///< Their full paths, in the order copied
     bool image_not_sent = false;  ///< An image was offered but isn't in items (a text copy, or it couldn't be converted)
     std::vector<clipbundle::item> items;  ///< In sending order
     std::vector<std::string> formats;  ///< Every format offered, for debug logs
@@ -35,9 +36,11 @@ namespace fork_tweaks::clipboard_win {
 
   /**
    * Replaces the clipboard with the items, in their order, plus a bitmap copy of images for apps
-   * that only paste bitmaps. Returns the new sequence number, or 0 if the clipboard couldn't be written.
+   * that only paste bitmaps. With files (full paths), it also lists them as CF_HDROP with
+   * "Preferred DropEffect" set to copy, so Explorer pastes copies. Returns the new sequence number,
+   * or 0 if the clipboard couldn't be written.
    */
-  std::uint32_t write(const std::vector<clipbundle::item> &items, bool concealed);
+  std::uint32_t write(const std::vector<clipbundle::item> &items, bool concealed, const std::vector<std::wstring> &files = {});
 }  // namespace fork_tweaks::clipboard_win
 
 #endif

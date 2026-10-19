@@ -12,6 +12,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
+#include <set>
 
 #ifdef CLIPBUNDLE_WITH_ZLIB
   #include <zlib.h>
@@ -855,6 +857,220 @@ namespace clipbundle {
       return false;
     }
     return true;
+  }
+
+  namespace {
+    constexpr std::uint8_t k_manifest_version = 1;
+    constexpr std::uint8_t k_entry_directory = 1;
+
+    // The parts of a '/'-separated path
+    std::vector<std::string_view> split_path(std::string_view path) {
+      std::vector<std::string_view> parts;
+      std::size_t start = 0;
+      for (;;) {
+        std::size_t slash = path.find('/', start);
+        parts.push_back(path.substr(start, slash == std::string_view::npos ? std::string_view::npos : slash - start));
+        if (slash == std::string_view::npos) {
+          return parts;
+        }
+        start = slash + 1;
+      }
+    }
+
+    std::string ascii_lower(std::string_view text) {
+      std::string out(text);
+      for (char &c : out) {
+        if (c >= 'A' && c <= 'Z') {
+          c = static_cast<char>(c - 'A' + 'a');
+        }
+      }
+      return out;
+    }
+
+    // One part of a path as a name both Windows and macOS can have
+    std::string safe_name(std::string_view part) {
+      std::string name;
+      for (char c : part) {
+        unsigned char u = static_cast<unsigned char>(c);
+        bool bad = u < 0x20 || u == 0x7F || std::strchr("<>:\"\\|?*", c) != nullptr;
+        name.push_back(bad ? '_' : c);
+      }
+      while (!name.empty() && (name.back() == '.' || name.back() == ' ')) {
+        name.pop_back();
+      }
+      if (name.empty()) {
+        return "_";
+      }
+
+      // CON, CON.txt and the like name devices on Windows
+      std::string stem = ascii_lower(name.substr(0, name.find('.')));
+      static const char *const reserved[] = {"con", "prn", "aux", "nul"};
+      bool device = std::find(std::begin(reserved), std::end(reserved), stem) != std::end(reserved);
+      if (!device && stem.size() == 4 && (stem.compare(0, 3, "com") == 0 || stem.compare(0, 3, "lpt") == 0) && stem[3] >= '1' && stem[3] <= '9') {
+        device = true;
+      }
+      return device ? "_" + name : name;
+    }
+  }  // namespace
+
+  std::string transfer_id(const std::vector<file_entry> &entries) {
+    // Two FNV-1a hashes with different starting points
+    std::uint64_t a = 14695981039346656037ull;
+    std::uint64_t b = 0x6c62272e07bb0142ull;
+    auto mix = [&a, &b](std::string_view data) {
+      for (char c : data) {
+        a = (a ^ static_cast<unsigned char>(c)) * 1099511628211ull;
+        b = (b ^ static_cast<unsigned char>(c)) * 1099511628211ull;
+      }
+    };
+    for (const file_entry &e : entries) {
+      std::string fields;
+      put_u8(fields, e.directory ? k_entry_directory : 0);
+      put_u64(fields, e.size);
+      put_u64(fields, static_cast<std::uint64_t>(e.mtime));
+      put_u32(fields, static_cast<std::uint32_t>(e.path.size()));
+      mix(fields);
+      mix(e.path);
+    }
+    return etag_hex(a) + etag_hex(b);
+  }
+
+  bool valid_transfer_id(std::string_view id) {
+    return id.size() == 32 && std::all_of(id.begin(), id.end(), [](char c) {
+      return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+    });
+  }
+
+  bool well_formed_path(std::string_view path) {
+    if (path.empty() || path.size() > k_max_path_bytes || path.front() == '/') {
+      return false;
+    }
+    for (char c : path) {
+      unsigned char u = static_cast<unsigned char>(c);
+      if (u < 0x20 || u == 0x7F || c == '\\') {
+        return false;
+      }
+    }
+    for (std::string_view part : split_path(path)) {
+      if (part.empty() || part == "." || part == "..") {
+        return false;
+      }
+    }
+    // A drive ("C:") at the start
+    return !(path.size() >= 2 && path[1] == ':');
+  }
+
+  std::string encode_manifest(const file_manifest &m) {
+    // u8 version, u8 transfer length, transfer, u32 entry count, then per entry:
+    // u8 flags (1: folder), u64 size, u64 mtime, u16 path length, path
+    std::string out;
+    put_u8(out, k_manifest_version);
+    put_u8(out, static_cast<std::uint8_t>(m.transfer.size()));
+    out += m.transfer;
+    put_u32(out, static_cast<std::uint32_t>(m.entries.size()));
+    for (const file_entry &e : m.entries) {
+      put_u8(out, e.directory ? k_entry_directory : 0);
+      put_u64(out, e.directory ? 0 : e.size);
+      put_u64(out, static_cast<std::uint64_t>(e.mtime));
+      put_u16(out, static_cast<std::uint16_t>(e.path.size()));
+      out += e.path;
+    }
+    return out;
+  }
+
+  bool decode_manifest(std::string_view data, file_manifest &out, std::string *error) {
+    out = file_manifest {};
+    reader r(data);
+
+    std::uint8_t version, id_size;
+    std::string_view id;
+    if (!r.u8(version) || version != k_manifest_version) {
+      return fail(error, "unsupported file list version");
+    }
+    if (!r.u8(id_size) || !r.bytes(id_size, id) || !valid_transfer_id(id)) {
+      return fail(error, "bad file list id");
+    }
+    out.transfer = std::string(id);
+
+    std::uint32_t count;
+    if (!r.u32(count) || count == 0 || count > k_max_file_entries) {
+      return fail(error, "bad file count");
+    }
+
+    std::uint64_t total = 0;
+    for (std::uint32_t i = 0; i < count; i++) {
+      std::uint8_t flags;
+      std::uint64_t size, mtime;
+      std::uint16_t path_size;
+      std::string_view path;
+      if (!r.u8(flags) || !r.u64(size) || !r.u64(mtime) || !r.u16(path_size) || !r.bytes(path_size, path)) {
+        return fail(error, "truncated file list");
+      }
+      if (!well_formed_path(path)) {
+        return fail(error, "bad path in the file list");
+      }
+
+      file_entry e;
+      e.path = std::string(path);
+      e.directory = (flags & k_entry_directory) != 0;
+      e.size = e.directory ? 0 : size;
+      e.mtime = static_cast<std::int64_t>(mtime);
+      if (e.size > k_max_file_bytes - total) {
+        return fail(error, "files too large");
+      }
+      total += e.size;
+      out.entries.push_back(std::move(e));
+    }
+
+    if (!r.done()) {
+      return fail(error, "extra bytes after the file list");
+    }
+    return true;
+  }
+
+  std::uint64_t manifest_bytes(const file_manifest &m) {
+    std::uint64_t total = 0;
+    for (const file_entry &e : m.entries) {
+      total += e.directory ? 0 : e.size;
+    }
+    return total;
+  }
+
+  std::vector<std::string> local_paths(const file_manifest &m) {
+    std::vector<std::string> paths;
+    std::set<std::string> taken;  // lowercased names in use
+    std::vector<std::string> left_out;  // original paths of entries left out, with a '/' after
+
+    for (const file_entry &e : m.entries) {
+      bool inside_left_out = std::any_of(left_out.begin(), left_out.end(), [&e](const std::string &prefix) {
+        return e.path.compare(0, prefix.size(), prefix) == 0;
+      });
+
+      std::string local;
+      if (!inside_left_out && well_formed_path(e.path)) {
+        for (std::string_view part : split_path(e.path)) {
+          local += (local.empty() ? "" : "/") + safe_name(part);
+        }
+        if (!taken.insert(ascii_lower(local)).second) {
+          local.clear();
+        }
+      }
+      if (local.empty()) {
+        left_out.push_back(e.path + "/");
+      }
+      paths.push_back(std::move(local));
+    }
+    return paths;
+  }
+
+  std::vector<std::size_t> top_level(const file_manifest &m) {
+    std::vector<std::size_t> indexes;
+    for (std::size_t i = 0; i < m.entries.size(); i++) {
+      if (m.entries[i].path.find('/') == std::string::npos) {
+        indexes.push_back(i);
+      }
+    }
+    return indexes;
   }
 
 }  // namespace clipbundle

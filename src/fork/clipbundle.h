@@ -32,6 +32,7 @@ namespace clipbundle {
   enum flag : std::uint16_t {
     flag_unchanged = 1,  ///< The receiver already has this content; no items
     flag_concealed = 2,  ///< A password or other private content
+    flag_files_skipped = 4,  ///< Files were copied but aren't in the bundle (too many, too large, or unreadable)
   };
 
   struct item {
@@ -127,5 +128,57 @@ namespace clipbundle {
    * k_max_bundle_bytes. Returns false if it can't fit, or if only text would remain of a richer copy.
    */
   bool encode_within_limit(bundle &b, std::string &encoded, bool compress = true);
+
+  // ---- File copies ---------------------------------------------------------------------------
+  //
+  // Files copied in Explorer or Finder travel as a list in the bundle (an item of k_files_type), and
+  // their contents in chunks of up to k_file_chunk_bytes, a request each (/actions/clipboard with
+  // type=file). The other side's clipboard changes only once every file has arrived. Peers without
+  // this ignore the item, as an unknown type.
+
+  constexpr const char *k_files_type = "files/manifest";
+  constexpr std::size_t k_max_file_entries = 10000;
+  constexpr std::uint64_t k_max_file_bytes = std::uint64_t(20) << 30;  ///< All the files of one copy
+  constexpr std::uint64_t k_max_auto_file_bytes = std::uint64_t(1) << 30;  ///< What a sync on its own (not a shortcut) moves
+  constexpr std::size_t k_file_chunk_bytes = std::size_t(8) << 20;
+  constexpr std::size_t k_max_path_bytes = 1024;  ///< A relative path, in UTF-8 bytes
+
+  struct file_entry {
+    std::string path;  ///< Relative to the copy, parts separated by '/'; a top-level entry has none
+    std::uint64_t size = 0;  ///< 0 for a folder
+    std::int64_t mtime = 0;  ///< Last modified, in seconds since 1970 UTC; 0 if unknown
+    bool directory = false;
+  };
+
+  struct file_manifest {
+    std::string transfer;  ///< transfer_id() of the entries: names the copy on the machine that has the files
+    std::vector<file_entry> entries;  ///< A folder comes before what it holds
+  };
+
+  /** 32 hex digits made from the entries: the same files give the same id, so a copy read again matches */
+  std::string transfer_id(const std::vector<file_entry> &entries);
+  bool valid_transfer_id(std::string_view id);
+
+  /** The manifest as an item's data, and back. decode_manifest rejects any path that isn't well_formed_path(). */
+  std::string encode_manifest(const file_manifest &m);
+  bool decode_manifest(std::string_view data, file_manifest &out, std::string *error = nullptr);
+
+  /** Bytes of all the files */
+  std::uint64_t manifest_bytes(const file_manifest &m);
+
+  /** A plain relative path: not empty, no root or drive, no '\', no empty, '.' or '..' part, no control characters */
+  bool well_formed_path(std::string_view path);
+
+  /**
+   * The names to write the entries under here, one per entry. In each part of a path, what Windows
+   * can't have in a name (<>:"\|?* and control characters) becomes '_', trailing dots and spaces go,
+   * and Windows' reserved names (CON, PRN, AUX, NUL, COM1-9, LPT1-9, with any extension) get a '_' in
+   * front. An entry whose name is taken already (ignoring ASCII case, as macOS and Windows do), or
+   * that's inside one left out, is left out: its name is empty.
+   */
+  std::vector<std::string> local_paths(const file_manifest &m);
+
+  /** The indexes of the entries at the top of the copy, which are what the clipboard lists */
+  std::vector<std::size_t> top_level(const file_manifest &m);
 
 }  // namespace clipbundle
