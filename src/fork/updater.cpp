@@ -454,10 +454,11 @@ namespace fork_tweaks::updater {
       }
 
       BOOST_LOG(info) << "Update: installing "sv << update.version << (previous ? "" : " (no installer to roll back to)");
-      std::string error;
-      if (!launch_helper(update, previous, running_version, &error)) {
-        BOOST_LOG(error) << "Update: "sv << error;
-        set_state(fu::state_e::failed, "Couldn't install " + update.version + ": " + error);
+      // Not "error", which would hide BOOST_LOG(error)'s logger
+      std::string why;
+      if (!launch_helper(update, previous, running_version, &why)) {
+        BOOST_LOG(error) << "Update: "sv << why;
+        set_state(fu::state_e::failed, "Couldn't install " + update.version + ": " + why);
         return;
       }
       std::lock_guard lock {u().mutex};
