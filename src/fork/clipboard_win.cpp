@@ -64,6 +64,78 @@ namespace fork_tweaks::clipboard_win {
       std::string data;  ///< Straight (not premultiplied) BGRA, top row first
     };
 
+    /// CF_HDROP's header (DROPFILES in shlobj.h): the paths follow, at files_offset
+    struct drop_files_t {
+      DWORD files_offset;
+      POINT point;
+      BOOL non_client;
+      BOOL wide;
+    };
+
+    static_assert(sizeof(drop_files_t) == 20, "DROPFILES is 20 bytes");
+
+    /// DROPEFFECT_COPY, for "Preferred DropEffect"
+    constexpr DWORD k_drop_effect_copy = 1;
+
+    /// The paths in CF_HDROP's memory: NUL-terminated strings after the header, ending with an empty one
+    std::vector<std::wstring> dropped_files(const std::string &raw) {
+      std::vector<std::wstring> files;
+      drop_files_t header {};
+      if (raw.size() < sizeof(header)) {
+        return files;
+      }
+      std::memcpy(&header, raw.data(), sizeof(header));
+      if (header.files_offset < sizeof(header) || header.files_offset >= raw.size()) {
+        return files;
+      }
+
+      if (header.wide) {
+        std::size_t count = (raw.size() - header.files_offset) / sizeof(wchar_t);
+        std::wstring all(count, L'\0');
+        std::memcpy(&all[0], raw.data() + header.files_offset, count * sizeof(wchar_t));
+        std::size_t start = 0;
+        while (start < all.size()) {
+          std::size_t end = all.find(L'\0', start);
+          if (end == std::wstring::npos || end == start) {
+            break;
+          }
+          files.push_back(all.substr(start, end - start));
+          start = end + 1;
+        }
+        return files;
+      }
+
+      // An old app's ANSI list
+      std::string all = raw.substr(header.files_offset);
+      std::size_t start = 0;
+      while (start < all.size()) {
+        std::size_t end = all.find('\0', start);
+        if (end == std::string::npos || end == start) {
+          break;
+        }
+        std::string path = all.substr(start, end - start);
+        int size = MultiByteToWideChar(CP_ACP, 0, path.data(), static_cast<int>(path.size()), nullptr, 0);
+        std::wstring wide(size, L'\0');
+        MultiByteToWideChar(CP_ACP, 0, path.data(), static_cast<int>(path.size()), &wide[0], size);
+        files.push_back(std::move(wide));
+        start = end + 1;
+      }
+      return files;
+    }
+
+    /// CF_HDROP's memory for the paths, as Explorer writes it
+    std::string drop_files(const std::vector<std::wstring> &files) {
+      drop_files_t header {};
+      header.files_offset = sizeof(header);
+      header.wide = TRUE;
+      std::string out(reinterpret_cast<const char *>(&header), sizeof(header));
+      for (const std::wstring &file : files) {
+        out.append(reinterpret_cast<const char *>(file.c_str()), (file.size() + 1) * sizeof(wchar_t));
+      }
+      out.append(sizeof(wchar_t), '\0');
+      return out;
+    }
+
     bool open_clipboard() {
       for (int attempt = 0; attempt < k_open_attempts; attempt++) {
         if (OpenClipboard(nullptr)) {
@@ -379,6 +451,13 @@ namespace fork_tweaks::clipboard_win {
       }
     }
 
+    if (out.file_copy) {
+      std::string drop;
+      if (read_global(CF_HDROP, drop)) {
+        out.files = dropped_files(drop);
+      }
+    }
+
     std::vector<clipbundle::kind> kinds;
     bool image_offered = false;
     for (const offered &f : formats) {
@@ -506,7 +585,7 @@ namespace fork_tweaks::clipboard_win {
     return true;
   }
 
-  std::uint32_t write(const std::vector<clipbundle::item> &items, bool concealed) {
+  std::uint32_t write(const std::vector<clipbundle::item> &items, bool concealed, const std::vector<std::wstring> &files) {
     struct entry {
       UINT format;
       HGLOBAL memory;
@@ -558,6 +637,12 @@ namespace fork_tweaks::clipboard_win {
       } else if (const clipbundle::type_info *info = clipbundle::find_type(it.type); info != nullptr && info->windows_name != nullptr) {
         add(registered(info->windows_name), it.data.data(), it.data.size());
       }
+    }
+
+    if (!files.empty()) {
+      std::string drop = drop_files(files);
+      add(CF_HDROP, drop.data(), drop.size());
+      add(registered("Preferred DropEffect"), &k_drop_effect_copy, sizeof(k_drop_effect_copy));
     }
 
     if (concealed) {

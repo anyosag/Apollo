@@ -28,6 +28,7 @@
 #include "atomic_file.h"
 #include "file_handler.h"
 #include "fork/clipboard_bundle.h"  // [fork]
+#include "fork/clipboard_files.h"  // [fork]
 #include "fork/touch_emulation.h"  // [fork]
 #include "fork/updater.h"  // [fork]
 #include "globals.h"
@@ -1016,6 +1017,7 @@ namespace nvhttp {
 
     #ifdef _WIN32
       tree.put("root.LuzUpdate", fork_tweaks::updater::supported() ? 1 : 0);  // [fork] /actions/update works
+      tree.put("root.LuzClipboardFiles", fork_tweaks::clipboard_files::enabled() ? 1 : 0);  // [fork] file copies through the clipboard
       tree.put("root.VirtualDisplayCapable", true);
       if (!!(named_cert_p->perm & PERM::_all_actions)) {
         tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK);
@@ -1668,13 +1670,20 @@ namespace nvhttp {
     response->close_connection_after_response = true;
   }
 
-  // [fork] Replies for type=bundle, which may be sent from the clipboard thread
+  // [fork] Replies for type=bundle and file copies, which may be sent from the clipboard and file threads
   fork_tweaks::clipboard::reply_fn bundle_reply(resp_https_t response) {
     return [response](int status, std::string body) {
       SimpleWeb::CaseInsensitiveMultimap headers;
       headers.emplace("Content-Type", "application/x-luzlunar-clipboard");
       response->write(static_cast<SimpleWeb::StatusCode>(status), body, headers);
     };
+  }
+
+  // [fork] A rich clipboard request's arguments, and whether the client may download and upload files
+  fork_tweaks::clipboard::request_t clipboard_request(const crypto::named_cert_t &cert, std::string type, const args_t &args) {
+    return fork_tweaks::clipboard::make_request(cert.name, std::move(type), [&args](const char *name) {
+      return get_arg(args, name, "");
+    }, !!(cert.perm & PERM::file_dwnload), !!(cert.perm & PERM::file_upload));
   }
 
   void getClipboard(resp_https_t response, req_https_t request) {
@@ -1695,7 +1704,7 @@ namespace nvhttp {
 
     auto args = request->parse_query_string();
     auto clipboard_type = get_arg(args, "type", "");  // [fork] default: a missing type is a 400, not an exception
-    if (clipboard_type != "text"sv && !fork_tweaks::clipboard::accepts_type(clipboard_type)) {  // [fork] or "bundle"
+    if (clipboard_type != "text"sv && !fork_tweaks::clipboard::accepts_type(clipboard_type)) {  // [fork] or "bundle", "file", "files-done"
       BOOST_LOG(debug) << "Clipboard type [" << clipboard_type << "] is not supported!";
 
       response->write(SimpleWeb::StatusCode::client_error_bad_request);
@@ -1719,9 +1728,9 @@ namespace nvhttp {
       return;
     }
 
-    // [fork] Rich clipboard (text, formatting, images, Office) for LuzLunar
+    // [fork] Rich clipboard (text, formatting, images, Office) and file copies for LuzLunar
     if (clipboard_type != "text"sv) {
-      fork_tweaks::clipboard::get(named_cert_p->name, get_arg(args, "since", ""), get_arg(args, "have", ""), get_arg(args, "auto", "0") == "1", bundle_reply(response));
+      fork_tweaks::clipboard::get(clipboard_request(*named_cert_p, clipboard_type, args), bundle_reply(response));
       return;
     }
 
@@ -1749,7 +1758,7 @@ namespace nvhttp {
 
     auto args = request->parse_query_string();
     auto clipboard_type = get_arg(args, "type", "");  // [fork] default: a missing type is a 400, not an exception
-    if (clipboard_type != "text"sv && !fork_tweaks::clipboard::accepts_type(clipboard_type)) {  // [fork] or "bundle"
+    if (clipboard_type != "text"sv && !fork_tweaks::clipboard::accepts_type(clipboard_type)) {  // [fork] or "bundle", "file", "files-done"
       BOOST_LOG(debug) << "Clipboard type [" << clipboard_type << "] is not supported!";
 
       response->write(SimpleWeb::StatusCode::client_error_bad_request);
@@ -1773,9 +1782,11 @@ namespace nvhttp {
       return;
     }
 
-    // [fork] Rich clipboard (text, formatting, images, Office) for LuzLunar
+    // [fork] Rich clipboard (text, formatting, images, Office) and file copies for LuzLunar
     if (clipboard_type != "text"sv) {
-      fork_tweaks::clipboard::set(named_cert_p->name, request->content.string(), bundle_reply(response));
+      auto fork_request = clipboard_request(*named_cert_p, clipboard_type, args);
+      fork_request.body = request->content.string();
+      fork_tweaks::clipboard::set(std::move(fork_request), bundle_reply(response));
       return;
     }
 

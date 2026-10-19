@@ -446,7 +446,181 @@ static void test_limit() {
   CHECK(encoded.empty());
 }
 
+static file_entry entry(const std::string &path, std::uint64_t size, bool directory = false, std::int64_t mtime = 1700000000) {
+  file_entry e;
+  e.path = path;
+  e.size = size;
+  e.directory = directory;
+  e.mtime = mtime;
+  return e;
+}
+
+static void test_manifest_round_trip() {
+  file_manifest m;
+  m.entries = {entry("Photos", 0, true), entry("Photos/IMG 1.jpg", 4000000), entry("Photos/raw/IMG 1.dng", 25000000),
+               entry("notes.txt", 12, false, 0), entry("Empty", 0, true), entry("Ünïcødé ✓.pdf", 1)};
+  m.transfer = transfer_id(m.entries);
+  CHECK(valid_transfer_id(m.transfer));
+
+  file_manifest back;
+  std::string error;
+  CHECK(decode_manifest(encode_manifest(m), back, &error));
+  CHECK(error.empty());
+  CHECK(back.transfer == m.transfer);
+  CHECK(back.entries.size() == m.entries.size());
+  for (std::size_t i = 0; i < m.entries.size() && i < back.entries.size(); i++) {
+    CHECK(back.entries[i].path == m.entries[i].path);
+    CHECK(back.entries[i].size == m.entries[i].size);
+    CHECK(back.entries[i].mtime == m.entries[i].mtime);
+    CHECK(back.entries[i].directory == m.entries[i].directory);
+  }
+  CHECK(manifest_bytes(back) == 29000013);
+
+  std::vector<std::size_t> top = top_level(back);
+  CHECK(top.size() == 4);
+  CHECK(top.size() == 4 && top[0] == 0 && top[1] == 3 && top[2] == 4 && top[3] == 5);
+
+  // In a bundle next to the text, and part of its hash like any item
+  bundle b;
+  b.items = {{"text/plain", "Photos\nnotes.txt"}, {k_files_type, encode_manifest(m)}};
+  bundle decoded;
+  CHECK(decode(encode(b), decoded) && same_items(decoded.items, b.items));
+  CHECK(etag(b.items) != etag({b.items[0]}));
+}
+
+static void test_transfer_id() {
+  std::vector<file_entry> a = {entry("a.txt", 1), entry("b.txt", 2)};
+  std::vector<file_entry> same = {entry("a.txt", 1), entry("b.txt", 2)};
+  std::vector<file_entry> resized = {entry("a.txt", 1), entry("b.txt", 3)};
+  std::vector<file_entry> touched = {entry("a.txt", 1), entry("b.txt", 2, false, 1700000001)};
+  CHECK(transfer_id(a) == transfer_id(same));  // a copy read again matches
+  CHECK(transfer_id(a) != transfer_id(resized));
+  CHECK(transfer_id(a) != transfer_id(touched));
+  CHECK(transfer_id(a).size() == 32);
+
+  CHECK(!valid_transfer_id(""));
+  CHECK(!valid_transfer_id(std::string(31, 'a')));
+  CHECK(!valid_transfer_id(std::string(32, 'A')));
+  CHECK(!valid_transfer_id(std::string(31, 'a') + "/"));
+  CHECK(valid_transfer_id(std::string(32, '0')));
+}
+
+static void test_bad_manifests() {
+  file_manifest m;
+  m.entries = {entry("a.txt", 5)};
+  m.transfer = transfer_id(m.entries);
+  std::string good = encode_manifest(m);
+  file_manifest out;
+  CHECK(decode_manifest(good, out));
+
+  // Truncated anywhere, or with a byte too many
+  for (std::size_t n = 0; n < good.size(); n++) {
+    CHECK(!decode_manifest(good.substr(0, n), out));
+  }
+  CHECK(!decode_manifest(good + "x", out));
+
+  // Paths that could leave the folder they're written into
+  for (const char *path : {"../evil", "a/../../evil", "/etc/passwd", "C:\\Windows\\win.ini", "C:evil", "a\\..\\b", "a//b", "./a", "a/.",
+                           "", "a/b/", "tab\there"}) {
+    file_manifest bad;
+    bad.entries = {entry(path, 1)};
+    bad.transfer = transfer_id(bad.entries);
+    std::string error;
+    CHECK(!decode_manifest(encode_manifest(bad), out, &error));
+    CHECK(!error.empty());
+  }
+
+  // Too many files, too many bytes, a bad id
+  file_manifest many;
+  for (std::size_t i = 0; i <= k_max_file_entries; i++) {
+    many.entries.push_back(entry("f" + std::to_string(i), 1));
+  }
+  many.transfer = transfer_id(many.entries);
+  CHECK(!decode_manifest(encode_manifest(many), out));
+
+  file_manifest huge;
+  huge.entries = {entry("a", k_max_file_bytes), entry("b", 1)};
+  huge.transfer = transfer_id(huge.entries);
+  CHECK(!decode_manifest(encode_manifest(huge), out));
+  huge.entries.pop_back();
+  huge.transfer = transfer_id(huge.entries);
+  CHECK(decode_manifest(encode_manifest(huge), out));
+
+  file_manifest unnamed = m;
+  unnamed.transfer = "not-an-id";
+  CHECK(!decode_manifest(encode_manifest(unnamed), out));
+
+  file_manifest empty;
+  empty.transfer = transfer_id(empty.entries);
+  CHECK(!decode_manifest(encode_manifest(empty), out));
+
+  // A folder's size is ignored
+  file_manifest folder;
+  folder.entries = {entry("dir", 99, true)};
+  folder.transfer = transfer_id(folder.entries);
+  CHECK(decode_manifest(encode_manifest(folder), out) && out.entries[0].size == 0);
+}
+
+static void test_paths() {
+  CHECK(well_formed_path("a"));
+  CHECK(well_formed_path("a b/c.d/e"));
+  CHECK(well_formed_path("..hidden"));  // a name, not a parent
+  CHECK(well_formed_path("Ünïcødé/✓"));
+  CHECK(!well_formed_path(".."));
+  CHECK(!well_formed_path("a/../b"));
+  CHECK(!well_formed_path("D:"));
+  CHECK(!well_formed_path("a:b"));  // drive A, relative
+  CHECK(!well_formed_path(std::string(k_max_path_bytes + 1, 'a')));
+
+  // Names Windows can't have, and its devices
+  file_manifest m;
+  m.entries = {entry("What? <draft>: v2*.txt", 1), entry("CON", 1), entry("con.txt", 1), entry("COM1.log", 1), entry("COMPASS", 1),
+               entry("trailing. . ", 1), entry("...", 1), entry("pipe|d", 1)};
+  std::vector<std::string> local = local_paths(m);
+  CHECK(local.size() == m.entries.size());
+  if (local.size() == m.entries.size()) {
+    CHECK(local[0] == "What_ _draft__ v2_.txt");
+    CHECK(local[1] == "_CON");
+    CHECK(local[2] == "_con.txt");
+    CHECK(local[3] == "_COM1.log");
+    CHECK(local[4] == "COMPASS");
+    CHECK(local[5] == "trailing");
+    CHECK(local[6] == "_");
+    CHECK(local[7] == "pipe_d");
+  }
+
+  // A name taken already, ignoring case, is left out, with everything inside it
+  file_manifest clash;
+  clash.entries = {entry("Report.pdf", 1), entry("report.PDF", 2), entry("ab:c", 1), entry("ab_c", 1), entry("Dir", 0, true),
+                   entry("Dir/x", 1), entry("dir", 0, true), entry("dir/y", 1), entry("dir/sub", 0, true), entry("dir/sub/z", 1), entry("other", 1)};
+  local = local_paths(clash);
+  CHECK(local.size() == clash.entries.size());
+  if (local.size() == clash.entries.size()) {
+    CHECK(local[0] == "Report.pdf");
+    CHECK(local[1].empty());
+    CHECK(local[2] == "ab_c");
+    CHECK(local[3].empty());
+    CHECK(local[4] == "Dir");
+    CHECK(local[5] == "Dir/x");
+    CHECK(local[6].empty());
+    CHECK(local[7].empty());
+    CHECK(local[8].empty());
+    CHECK(local[9].empty());
+    CHECK(local[10] == "other");
+  }
+
+  // A file in a folder the list doesn't name gets a sanitized folder path too
+  file_manifest loose;
+  loose.entries = {entry("x?/y.txt", 1)};
+  local = local_paths(loose);
+  CHECK(local.size() == 1 && local[0] == "x_/y.txt");
+}
+
 int main() {
+  test_manifest_round_trip();
+  test_transfer_id();
+  test_bad_manifests();
+  test_paths();
   test_round_trip();
   test_corrupt_input();
   test_etag();

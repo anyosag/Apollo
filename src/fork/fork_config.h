@@ -15,6 +15,10 @@ namespace fork_tweaks {
   /// `fork_clipboard_rich`: rich clipboard sync for LuzLunar (`/actions/clipboard?type=bundle`). Off behaves like stock Apollo (text only).
   inline bool clipboard_rich = true;
 
+  /// `fork_clipboard_files`: with rich sync, files copied in Explorer or LuzLunar's Finder cross too
+  /// (clipboard_files.h), for clients with the File Download and File Upload permissions.
+  inline bool clipboard_file_copies = true;
+
   /// `fork_web_ui_remote_first_setup`: allow setting the first Web UI password from the network (the
   /// addresses `origin_web_ui_allowed` allows), not only from this PC.
   inline bool web_ui_remote_first_setup = false;
