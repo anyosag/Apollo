@@ -35,6 +35,10 @@ namespace fork_tweaks {
   /// fed with the Mac trackpad's fingers (src/fork/touchpad_win.*). Off, the trackpad stays a mouse.
   inline bool touchpad_passthrough = true;
 
+  /// `fork_auto_update`: install the fork's new master builds by themselves while nobody streams
+  /// (src/fork/updater.*). Off, they download and wait for Install in the Web UI or LuzLunar.
+  inline bool auto_update = false;
+
   /**
    * @brief Read the fork-only options and remove them from @p vars, so they aren't reported as unrecognized.
    * @param vars The parsed sunshine.conf options.

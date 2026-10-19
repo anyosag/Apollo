@@ -29,6 +29,7 @@
 #include "file_handler.h"
 #include "fork/clipboard_bundle.h"  // [fork]
 #include "fork/touch_emulation.h"  // [fork]
+#include "fork/updater.h"  // [fork]
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
@@ -366,6 +367,9 @@ namespace nvhttp {
         named_cert_p->uuid = el.value("uuid", "");
         named_cert_p->display_mode = el.value("display_mode", "");
         named_cert_p->perm = (PERM)(util::get_non_string_json_value<uint32_t>(el, "perm", (uint32_t)PERM::_all)) & PERM::_all;
+        if (named_cert_p->perm == PERM::_all_before_host_update) {
+          named_cert_p->perm = PERM::_all;  // [fork] a client with every permission keeps every permission
+        }
         named_cert_p->enable_legacy_ordering = el.value("enable_legacy_ordering", true);
         named_cert_p->allow_client_commands = el.value("allow_client_commands", true);
         named_cert_p->always_use_virtual_display = el.value("always_use_virtual_display", false);
@@ -1008,6 +1012,7 @@ namespace nvhttp {
       tree.put("root.Permission", std::to_string((uint32_t)named_cert_p->perm));
 
     #ifdef _WIN32
+      tree.put("root.LuzUpdate", fork_tweaks::updater::supported() ? 1 : 0);  // [fork] /actions/update works
       tree.put("root.VirtualDisplayCapable", true);
       if (!!(named_cert_p->perm & PERM::_all_actions)) {
         tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK);
@@ -1787,6 +1792,48 @@ namespace nvhttp {
     return;
   }
 
+  /**
+   * @brief [fork] Apollo's over-the-air updates for LuzLunar: GET reports the updater's state; POST
+   * takes {"action": "check"|"install", "automatic": true|false} and reports the state after it.
+   * Needs the host_update permission.
+   */
+  void forkUpdate(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    auto named_cert_p = get_verified_cert(request);
+    if (!(named_cert_p->perm & PERM::host_update)) {
+      BOOST_LOG(debug) << "Permission Update denied for [" << named_cert_p->name << "] (" << (uint32_t) named_cert_p->perm << ")";
+      response->write(SimpleWeb::StatusCode::client_error_unauthorized);
+      response->close_connection_after_response = true;
+      return;
+    }
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+
+    if (request->method == "POST") {
+      auto body = nlohmann::json::parse(request->content.string(), nullptr, false);
+      if (body.is_discarded() || !body.is_object()) {
+        response->write(SimpleWeb::StatusCode::client_error_bad_request);
+        response->close_connection_after_response = true;
+        return;
+      }
+      std::string action = body.contains("action") && body["action"].is_string() ? body["action"].get<std::string>() : "";
+      std::optional<bool> automatic;
+      if (body.contains("automatic") && body["automatic"].is_boolean()) {
+        automatic = body["automatic"].get<bool>();
+      }
+      std::string error;
+      if (!fork_tweaks::updater::request(action, automatic, &error)) {
+        response->write(SimpleWeb::StatusCode::client_error_bad_request, nlohmann::json {{"error", error}}.dump(), headers);
+        return;
+      }
+      BOOST_LOG(info) << "Update: ["sv << named_cert_p->name << "] asked to "sv << (action.empty() ? "change settings"s : action);
+    }
+
+    response->write(SimpleWeb::StatusCode::success_ok, fork_tweaks::updater::status_json(), headers);
+  }
+
   void setup(const std::string &pkey, const std::string &cert) {
     conf_intern.pkey = pkey;
     conf_intern.servercert = cert;
@@ -1887,6 +1934,8 @@ namespace nvhttp {
     https_server.resource["^/cancel$"]["GET"] = cancel;
     https_server.resource["^/actions/clipboard$"]["GET"] = getClipboard;
     https_server.resource["^/actions/clipboard$"]["POST"] = setClipboard;
+    https_server.resource["^/actions/update$"]["GET"] = forkUpdate;  // [fork]
+    https_server.resource["^/actions/update$"]["POST"] = forkUpdate;  // [fork]
 
     https_server.config.reuse_address = true;
     https_server.config.address = net::af_to_any_address_string(address_family);

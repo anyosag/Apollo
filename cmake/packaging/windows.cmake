@@ -24,6 +24,8 @@ install(TARGETS audio-info RUNTIME DESTINATION "tools" COMPONENT audio)
 
 # Mandatory tools
 install(TARGETS sunshinesvc RUNTIME DESTINATION "tools" COMPONENT application)
+# [fork] Installs over-the-air updates (src/fork/updater.cpp)
+install(TARGETS apollo-updater RUNTIME DESTINATION "tools" COMPONENT application)
 
 # Drivers
 # [fork] LuzVDA (anyosag/LuzVDA): the scripts and certificate from the source tree, the signed driver

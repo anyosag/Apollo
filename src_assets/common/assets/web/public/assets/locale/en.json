@@ -471,6 +471,19 @@
   "login": {
     "save_password": "Remember Password"
   },
+  "fork_update": {
+    "automatic": "Install updates automatically",
+    "automatic_desc": "New builds of this fork's master branch install by themselves while nobody streams and no app runs. Off, they download and wait for Install. Apollo checks every 30 minutes, puts the previous build back if a new one doesn't start, and keeps your configuration and pairings.",
+    "build_master": "Build {run} of the fork's master branch",
+    "build_other": "A build from a branch or this PC, not from master: it updates only when you click Install",
+    "check": "Check now",
+    "install": "Install now",
+    "last_install": "Last install:",
+    "loading": "Loading the version...",
+    "not_checked": "Apollo hasn't checked for updates yet; it checks a minute after it starts",
+    "unsupported": "Over-the-air updates work when Apollo runs as its Windows service.",
+    "version": "Version {version}"
+  },
   "index": {
     "description": "Apollo is a self-hosted game stream host for Moonlight.",
     "download": "Download",
@@ -514,6 +527,7 @@
     "file_upload": "File Upload",
     "file_dwnload": "File Download",
     "server_cmd": "Server Command",
+    "host_update": "Update Apollo",
     "list": "List Apps",
     "view": "View Streams",
     "launch": "Launch Apps"
