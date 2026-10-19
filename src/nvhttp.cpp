@@ -504,6 +504,9 @@ namespace nvhttp {
       BOOST_LOG(info) << "Client ["sv << launch_session->device_name << "] streams to "sv << client_display::summary(*launch_session->client_screen);
     }
 
+    // [fork] LuzLunar's Mac trackpad mode, which the stream turns on if this host offers it
+    launch_session->mac_trackpad = get_arg(args, "luzTrackpad", "") == "mac"sv;
+
     launch_session->client_do_cmds = named_cert_p->do_cmds;
     launch_session->client_undo_cmds = named_cert_p->undo_cmds;
 

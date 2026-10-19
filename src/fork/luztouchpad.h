@@ -23,6 +23,12 @@
  * Every frame lists every finger still on the pad. A finger that lifts is listed once more with
  * phase_up; a slot missing from a frame has lifted too, so a lost frame can't leave one stuck.
  * While fingers are down the client repeats the current frame every k_keepalive_ms.
+ *
+ * Mac trackpad mode: a host that also advertises k_host_mac_trackpad_flag takes the launch
+ * argument luzTrackpad=mac. For that stream, macOS's own pointer motion, clicks and scrolling
+ * arrive as ordinary mouse input, which the host injects without Windows' pointer acceleration,
+ * and the frames only carry 3- and 4-finger gestures and pinch, for a touchpad that Windows makes
+ * gesture-only (it never moves the pointer or clicks). The frames themselves don't change.
  */
 #pragma once
 
@@ -33,6 +39,7 @@
 namespace luztouchpad {
 
   constexpr std::uint32_t k_host_feature_flag = 0x40000000;  ///< In the host's x-ss-general.featureFlags
+  constexpr std::uint32_t k_host_mac_trackpad_flag = 0x20000000;  ///< Also there: Mac trackpad mode (above)
   constexpr std::uint32_t k_magic = 0x55004C01;
   constexpr std::uint8_t k_version = 1;
   constexpr std::size_t k_max_contacts = 5;  ///< Windows' synthetic touchpad takes at most 5

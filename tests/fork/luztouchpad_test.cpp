@@ -64,6 +64,11 @@ static void test_layout() {
   for (std::size_t i = k_header_size + 3 * k_contact_size; i < k_packet_size; i++) {
     CHECK(p[i] == 0);
   }
+
+  // The two feature flags are separate bits, clear of Moonlight's own (LI_FF_* use the low bits)
+  CHECK(k_host_feature_flag == 0x40000000);
+  CHECK(k_host_mac_trackpad_flag == 0x20000000);
+  CHECK((k_host_feature_flag & k_host_mac_trackpad_flag) == 0);
 }
 
 static void test_round_trip() {

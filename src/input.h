@@ -33,6 +33,15 @@ namespace input {
    */
   void enable_touch_emulation(std::shared_ptr<input_t> &input, const std::string &device_name);
 
+  /**
+   * @brief [fork] LuzLunar's Mac trackpad mode for this client: macOS points, clicks and scrolls, so
+   * its synthetic touchpad only makes gestures, and Windows doesn't accelerate the pointer again
+   * while the stream runs (fork/pointer_speed.h). Call before the client's input arrives.
+   * @param input The client's input context.
+   * @param device_name The client's name, for the log.
+   */
+  void enable_mac_trackpad(std::shared_ptr<input_t> &input, const std::string &device_name);
+
   struct touch_port_t: public platf::touch_port_t {
     int env_width, env_height;
 

@@ -28,8 +28,12 @@ namespace fork_touchpad {
 
   class session_t;
 
-  /// A client's touchpad, with no device until its first frame
-  std::shared_ptr<session_t> make_session();
+  /**
+   * @brief A client's touchpad, with no device until its first frame.
+   * @param gesture_only For LuzLunar's Mac trackpad mode: the device makes gestures (three- and
+   * four-finger swipes, pinch) but never moves the pointer or clicks, which macOS does.
+   */
+  std::shared_ptr<session_t> make_session(bool gesture_only);
 
   /// Feeds a frame. Call on the input thread (task_pool), like all of this client's input.
   void frame(const std::shared_ptr<session_t> &session, const luztouchpad::frame &frame);
@@ -42,8 +46,8 @@ namespace platf {
   class deinit_t;
   typedef deinit_t client_input_t;
 
-  /// Feeds a frame to the client's touchpad, making it on first use (platform/windows/input.cpp)
-  void touchpad_frame(client_input_t *input, const luztouchpad::frame &frame);
+  /// Feeds a frame to the client's touchpad, making it on first use, gestures only with @p gesture_only (platform/windows/input.cpp)
+  void touchpad_frame(client_input_t *input, const luztouchpad::frame &frame, bool gesture_only);
 
   /// Lifts every finger on the client's touchpad, if it has one (platform/windows/input.cpp)
   void touchpad_cancel(client_input_t *input);

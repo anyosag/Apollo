@@ -38,6 +38,11 @@ namespace fork_tweaks {
   /// fed with the Mac trackpad's fingers (src/fork/touchpad_win.*). Off, the trackpad stays a mouse.
   inline bool touchpad_passthrough = true;
 
+  /// `fork_trackpad_mac`: also offer LuzLunar's Mac trackpad mode, where macOS points, clicks and
+  /// scrolls and the touchpad only gets gestures; Windows doesn't accelerate the pointer while it
+  /// streams (pointer_speed.h). Off, such a client gets the Windows touchpad.
+  inline bool trackpad_mac = true;
+
   /// `fork_auto_update`: install the fork's new master builds by themselves while nobody streams
   /// (src/fork/updater.*). Off, they download and wait for Install in the Web UI or LuzLunar.
   inline bool auto_update = false;

@@ -93,6 +93,7 @@ namespace fork_touchpad {
     }
 
     host_t host;
+    bool gesture_only = false;  ///< Mac trackpad mode: the device makes gestures only
     HSYNTHETICPOINTERDEVICE device = nullptr;
     bool unsupported = false;  ///< Windows wouldn't make the device, so this client's frames are dropped
     thread_pool_util::ThreadPool::task_id_t timer = nullptr;
@@ -104,7 +105,7 @@ namespace fork_touchpad {
 
   namespace {
     bool create_device(session_t &s, std::uint16_t width, std::uint16_t height) {
-      auto params = win::touchpad_params(width, height);
+      auto params = win::touchpad_params(width, height, s.gesture_only);
       s.device = win::api().create(&params);
       if (!s.device) {
         auto err = GetLastError();
@@ -113,7 +114,8 @@ namespace fork_touchpad {
         return false;
       }
       s.host.set_device_size(width, height);
-      BOOST_LOG(info) << "fork: made a "sv << width / 100.0 << " x "sv << height / 100.0 << " mm synthetic touchpad for LuzLunar"sv;
+      BOOST_LOG(info) << "fork: made a "sv << width / 100.0 << " x "sv << height / 100.0 << " mm synthetic touchpad for LuzLunar"sv
+                      << (s.gesture_only ? ", for gestures only (Mac trackpad mode)"sv : ""sv);
       return true;
     }
 
@@ -220,8 +222,10 @@ namespace fork_touchpad {
     return true;
   }
 
-  std::shared_ptr<session_t> make_session() {
-    return std::make_shared<session_t>();
+  std::shared_ptr<session_t> make_session(bool gesture_only) {
+    auto session = std::make_shared<session_t>();
+    session->gesture_only = gesture_only;
+    return session;
   }
 
   void frame(const std::shared_ptr<session_t> &session, const luztouchpad::frame &frame) {

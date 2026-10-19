@@ -67,6 +67,9 @@ namespace rtsp_stream {
     /// [fork] Stock Moonlight for iOS, by its User-Agent: its Touchscreen mode's fingers can become touch
     bool moonlight_ios = false;
 
+    /// [fork] LuzLunar asked for its Mac trackpad mode (luzTrackpad=mac, fork/pointer_speed.h)
+    bool mac_trackpad = false;
+
   #ifdef _WIN32
     GUID display_guid{};
   #endif
