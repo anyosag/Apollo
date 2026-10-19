@@ -26,6 +26,8 @@ install(TARGETS audio-info RUNTIME DESTINATION "tools" COMPONENT audio)
 install(TARGETS sunshinesvc RUNTIME DESTINATION "tools" COMPONENT application)
 # [fork] Installs over-the-air updates (src/fork/updater.cpp)
 install(TARGETS apollo-updater RUNTIME DESTINATION "tools" COMPONENT application)
+# [fork] Opens the touch keyboard for stock Moonlight for iOS (src/fork/touch_keyboard.cpp)
+install(TARGETS apollo-touch-keyboard RUNTIME DESTINATION "tools" COMPONENT application)
 
 # Drivers
 # [fork] LuzVDA (anyosag/LuzVDA): the scripts and certificate from the source tree, the signed driver

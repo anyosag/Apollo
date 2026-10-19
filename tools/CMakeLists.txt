@@ -40,3 +40,16 @@ target_link_libraries(apollo-updater
         ws2_32
         ${PLATFORM_LIBRARIES})
 target_compile_options(apollo-updater PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
+# [fork] Opens the touch keyboard for stock Moonlight for iOS's taps in text fields (src/fork/touch_keyboard.cpp starts it)
+add_executable(apollo-touch-keyboard apollo-touch-keyboard.cpp)
+set_target_properties(apollo-touch-keyboard PROPERTIES CXX_STANDARD 23)
+target_link_libraries(apollo-touch-keyboard
+        ${CMAKE_THREAD_LIBS_INIT}
+        dwmapi
+        ole32
+        oleaut32
+        shell32
+        user32
+        ${PLATFORM_LIBRARIES})
+target_compile_options(apollo-touch-keyboard PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
