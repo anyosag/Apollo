@@ -270,7 +270,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $helper = (Resolve-Path build/tools/apollo-mac-drive.exe).Path
           $account = 'luzdrive'
-          $password = 'Luz-' + [guid]::NewGuid().ToString('N').Substring(0, 16) + '!a1'
+          # 14 characters: net user asks for confirmation (and fails without a console) above that
+          $password = 'Lz!' + [guid]::NewGuid().ToString('N').Substring(0, 9) + 'a1'
           $share = 'LuzDriveTest'
           $dir = Join-Path $env:RUNNER_TEMP 'luzdrive-share'
           $labelKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2\##127.0.0.1#$share"
