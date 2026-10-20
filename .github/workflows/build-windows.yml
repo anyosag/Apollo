@@ -318,7 +318,8 @@ jobs:
             Send $process (Map-Line $share 'not-the-password')
             $answer = Read-Answer $process
             Expect $answer 'failed'
-            if ($answer.code -ne 1326) { throw "a wrong password gave error $($answer.code), not 1326" }
+            # A sign-in failure, as mac_drive_policy.h classifies it: Windows' SMB server says 86
+            if ($answer.code -notin 86, 1326) { throw "a wrong password gave error $($answer.code), not 86 or 1326" }
             $process = Start-Helper
             Send $process (Map-Line 'NoSuchShare' $password)
             $answer = Read-Answer $process
