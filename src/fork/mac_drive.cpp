@@ -181,13 +181,13 @@ namespace fork_tweaks::mac_drive {
     }
 
     /// Starts a helper mapping the drive. The request's password is wiped either way.
-    std::shared_ptr<helper_t> start_helper(const std::string &name, const std::string &host, policy::map_request_t &request, std::string &error) {
+    std::shared_ptr<helper_t> start_helper(const std::string &name, const std::string &host, policy::map_request_t &request, std::string &failure) {
       auto path = user_helper::path(L"apollo-mac-drive.exe");
       std::error_code ec;
       if (!std::filesystem::exists(path, ec)) {
         BOOST_LOG(warning) << "fork: Mac drive: "sv << path.string() << " is missing, so LuzLunar's Mac can't be a drive"sv;
         policy::wipe(request.password);
-        error = "helper";
+        failure = "helper";
         return nullptr;
       }
 
@@ -195,7 +195,7 @@ namespace fork_tweaks::mac_drive {
       auto result = user_helper::start(path, "Mac drive"sv, started);
       if (result != user_helper::start_e::started) {
         policy::wipe(request.password);
-        error = result == user_helper::start_e::no_user ? "no_user" : "helper";
+        failure = result == user_helper::start_e::no_user ? "no_user" : "helper";
         return nullptr;
       }
 
@@ -211,7 +211,7 @@ namespace fork_tweaks::mac_drive {
       if (!ok) {
         BOOST_LOG(error) << "fork: Mac drive: couldn't hand the helper its drive: error "sv << GetLastError();
         reap(*helper);
-        error = "helper";
+        failure = "helper";
         return nullptr;
       }
 
@@ -326,8 +326,8 @@ namespace fork_tweaks::mac_drive {
           entry.failure.reset();
           entry.added = false;
           ul.unlock();
-          std::string error;
-          auto helper = start_helper(name, host, request, error);
+          std::string failure;
+          auto helper = start_helper(name, host, request, failure);
           ul.lock();
           auto it = entries.find(key);
           if (it == entries.end()) {
@@ -336,7 +336,7 @@ namespace fork_tweaks::mac_drive {
           if (helper) {
             it->second.helper = std::move(helper);
           } else {
-            it->second.failure = failure_t {error, 0};
+            it->second.failure = failure_t {failure, 0};
           }
           return true;
         }
@@ -465,11 +465,11 @@ namespace fork_tweaks::mac_drive {
       return error_reply(403, "address");
     }
 
-    std::string error;
-    auto request = policy::parse_map_request(body, error);
+    std::string problem;
+    auto request = policy::parse_map_request(body, problem);
     if (!request) {
-      BOOST_LOG(warning) << "fork: Mac drive: client ["sv << client.name << "] asked for a drive: "sv << error;
-      return error_reply(400, error);
+      BOOST_LOG(warning) << "fork: Mac drive: client ["sv << client.name << "] asked for a drive: "sv << problem;
+      return error_reply(400, problem);
     }
 
     std::lock_guard lg(state_mutex);
