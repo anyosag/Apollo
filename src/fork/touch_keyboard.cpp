@@ -15,13 +15,11 @@
 // local includes
 #include "src/logging.h"
 #include "touch_keyboard.h"
+#include "user_helper.h"
 
 #ifdef _WIN32
   // platform includes
   #include <windows.h>
-  #include <userenv.h>
-
-  #include "src/platform/windows/misc.h"
 #endif
 
 using namespace std::literals;
@@ -50,28 +48,6 @@ namespace fork_tweaks::touch_keyboard {
     bool worker_running = false;
     bool helper_exited = false;  ///< Its output ended
 
-    std::filesystem::path helper_path() {
-      WCHAR path[MAX_PATH];
-      GetModuleFileNameW(nullptr, path, _countof(path));
-      return std::filesystem::path {path}.parent_path() / L"tools" / L"apollo-touch-keyboard.exe";
-    }
-
-    /// Logs one of the helper's lines: "<level>: <message>"
-    void log_line(std::string_view line) {
-      auto colon = line.find(": ");
-      auto level = colon == std::string_view::npos ? "info"sv : line.substr(0, colon);
-      auto message = colon == std::string_view::npos ? line : line.substr(colon + 2);
-      if (level == "debug") {
-        BOOST_LOG(debug) << "fork: touch keyboard: "sv << message;
-      } else if (level == "warning") {
-        BOOST_LOG(warning) << "fork: touch keyboard: "sv << message;
-      } else if (level == "error") {
-        BOOST_LOG(error) << "fork: touch keyboard: "sv << message;
-      } else {
-        BOOST_LOG(info) << "fork: touch keyboard: "sv << message;
-      }
-    }
-
     /// The helper's process, its input and the thread reading its output
     class helper_t {
     public:
@@ -87,49 +63,27 @@ namespace fork_tweaks::touch_keyboard {
         return _process != nullptr;
       }
 
-      /// Starts it as the signed-in user, unelevated, on the user's desktop
+      /// Starts it as the signed-in user, unelevated, on the user's desktop (user_helper.h)
       bool start(const std::string &device_name) {
-        auto path = helper_path();
+        auto path = user_helper::path(L"apollo-touch-keyboard.exe");
         std::error_code ec;
         if (!std::filesystem::exists(path, ec)) {
           BOOST_LOG(warning) << "fork: touch keyboard: "sv << path.string() << " is missing, so taps in text fields bring no keyboard"sv;
           return false;
         }
 
-        SECURITY_ATTRIBUTES inherit {sizeof(inherit), nullptr, TRUE};
-        HANDLE in_read = nullptr;
-        HANDLE in_write = nullptr;
-        HANDLE out_read = nullptr;
-        HANDLE out_write = nullptr;
-        if (!CreatePipe(&in_read, &in_write, &inherit, 0)) {
-          BOOST_LOG(error) << "fork: touch keyboard: couldn't make a pipe: error "sv << GetLastError();
-          return false;
-        }
-        if (!CreatePipe(&out_read, &out_write, &inherit, 0)) {
-          BOOST_LOG(error) << "fork: touch keyboard: couldn't make a pipe: error "sv << GetLastError();
-          CloseHandle(in_read);
-          CloseHandle(in_write);
-          return false;
-        }
-        // Apollo's ends stay here
-        SetHandleInformation(in_write, HANDLE_FLAG_INHERIT, 0);
-        SetHandleInformation(out_read, HANDLE_FLAG_INHERIT, 0);
-
-        auto ok = launch(path, in_read, out_write);
-        CloseHandle(in_read);
-        CloseHandle(out_write);
-        if (!ok) {
-          CloseHandle(in_write);
-          CloseHandle(out_read);
+        user_helper::process_t started;
+        if (user_helper::start(path, "touch keyboard"sv, started) != user_helper::start_e::started) {
           return false;
         }
 
-        _input = in_write;
+        _process = (HANDLE) started.process;
+        _input = (HANDLE) started.input;
         {
           std::lock_guard lg(state_mutex);
           helper_exited = false;
         }
-        _reader = std::thread(read_output, out_read);
+        _reader = std::thread(read_output, (HANDLE) started.output);
         BOOST_LOG(info) << "fork: touch keyboard helper started for client ["sv << device_name << "] (PID "sv << GetProcessId(_process) << ')';
         return true;
       }
@@ -173,70 +127,6 @@ namespace fork_tweaks::touch_keyboard {
       }
 
     private:
-      bool launch(const std::filesystem::path &path, HANDLE input, HANDLE output) {
-        auto list = platf::allocate_proc_thread_attr_list(1);
-        if (!list) {
-          return false;
-        }
-        HANDLE handles[] {input, output};
-        UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles, sizeof(handles), nullptr, nullptr);
-
-        WCHAR desktop[] = L"winsta0\\default";
-        STARTUPINFOEXW startup {};
-        startup.StartupInfo.cb = sizeof(startup);
-        startup.StartupInfo.lpDesktop = desktop;
-        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
-        startup.StartupInfo.hStdInput = input;
-        startup.StartupInfo.hStdOutput = output;
-        startup.StartupInfo.hStdError = output;
-        startup.lpAttributeList = list;
-
-        auto command = L"\"" + path.wstring() + L"\"";
-        auto dir = path.parent_path().wstring();
-        // Out of the service's job: TabTip.exe, which the helper may start, then isn't ended with Apollo.
-        // The helper still ends with Apollo, when its input closes.
-        DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | CREATE_BREAKAWAY_FROM_JOB;
-        PROCESS_INFORMATION process {};
-        BOOL ok = FALSE;
-        DWORD launch_error = 0;
-        for (int attempt = 0; attempt < 2 && !ok; attempt++) {
-          if (platf::is_running_as_system()) {
-            HANDLE token = platf::retrieve_users_token(false);
-            if (!token) {
-              BOOST_LOG(warning) << "fork: touch keyboard: nobody is signed in to start the helper for"sv;
-              platf::free_proc_thread_attr_list(list);
-              return false;
-            }
-            void *environment = nullptr;
-            CreateEnvironmentBlock(&environment, token, FALSE);
-            ok = CreateProcessAsUserW(token, path.c_str(), command.data(), nullptr, nullptr, TRUE, flags, environment, dir.c_str(), &startup.StartupInfo, &process);
-            launch_error = GetLastError();
-            if (environment) {
-              DestroyEnvironmentBlock(environment);
-            }
-            CloseHandle(token);
-          } else {
-            ok = CreateProcessW(path.c_str(), command.data(), nullptr, nullptr, TRUE, flags & ~CREATE_UNICODE_ENVIRONMENT, nullptr, dir.c_str(), &startup.StartupInfo, &process);
-            launch_error = GetLastError();
-          }
-          // A job that doesn't allow leaving it: the helper stays in it
-          if (!ok && launch_error == ERROR_ACCESS_DENIED && (flags & CREATE_BREAKAWAY_FROM_JOB)) {
-            flags &= ~CREATE_BREAKAWAY_FROM_JOB;
-            continue;
-          }
-          break;
-        }
-        platf::free_proc_thread_attr_list(list);
-
-        if (!ok) {
-          BOOST_LOG(error) << "fork: touch keyboard: couldn't start "sv << path.string() << ": error "sv << launch_error;
-          return false;
-        }
-        CloseHandle(process.hThread);
-        _process = process.hProcess;
-        return true;
-      }
-
       static void read_output(HANDLE output) {
         std::string buffer;
         char chunk[512];
@@ -250,7 +140,7 @@ namespace fork_tweaks::touch_keyboard {
               line.remove_suffix(1);
             }
             if (!line.empty()) {
-              log_line(line);
+              user_helper::log_line("touch keyboard"sv, line);
             }
             buffer.erase(0, end + 1);
           }

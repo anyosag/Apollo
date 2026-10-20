@@ -260,6 +260,113 @@ jobs:
             -DBUILD_TESTS=OFF
           ninja -C build
 
+      # The Mac drive's helper against a real SMB share on this runner: a local account shares a
+      # folder, which the helper maps through 127.0.0.1 the way it maps LuzLunar's Mac, and removes
+      # again; a wrong password, a missing share and open files answer as Apollo expects
+      # (src/fork/mac_drive_policy.h)
+      - name: Mac drive helper smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $helper = (Resolve-Path build/tools/apollo-mac-drive.exe).Path
+          $account = 'luzdrive'
+          $password = 'Luz-' + [guid]::NewGuid().ToString('N').Substring(0, 16) + '!a1'
+          $share = 'LuzDriveTest'
+          $dir = Join-Path $env:RUNNER_TEMP 'luzdrive-share'
+          $labelKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2\##127.0.0.1#$share"
+
+          function Start-Helper {
+            $info = [System.Diagnostics.ProcessStartInfo]::new($helper)
+            $info.RedirectStandardInput = $true
+            $info.RedirectStandardOutput = $true
+            $info.UseShellExecute = $false
+            [System.Diagnostics.Process]::Start($info)
+          }
+          function Send($process, $line) {
+            $process.StandardInput.WriteLine($line)
+            $process.StandardInput.Flush()
+          }
+          function Read-Answer($process) {
+            while ($true) {
+              $line = $process.StandardOutput.ReadLine()
+              if ($null -eq $line) { throw 'the helper ended without answering' }
+              if (-not $line.StartsWith('{')) { Write-Host "helper: $line"; continue }
+              Write-Host "helper answers: $line"
+              return $line | ConvertFrom-Json
+            }
+          }
+          function Map-Line($shareName, $secret) {
+            @{ cmd = 'map'; letter = 'M'; host = '127.0.0.1'; shares = @($shareName); user = $account; password = $secret; label = 'CI Mac' } | ConvertTo-Json -Compress
+          }
+          function Expect($answer, $result) {
+            if ($answer.result -ne $result) { throw "expected $result, got $($answer | ConvertTo-Json -Compress)" }
+          }
+
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Set-Content -Path (Join-Path $dir 'hello.txt') -Value 'from the share'
+          net user $account $password /add | Out-Null
+          if ($LASTEXITCODE) { throw "couldn't add the local account $account" }
+          try {
+            icacls $dir /grant "${account}:(OI)(CI)F" | Out-Null
+            net share "$share=$dir" "/grant:$account,FULL" | Out-Null
+            if ($LASTEXITCODE) { throw "couldn't share $dir" }
+
+            # First, before any sign-in succeeds (Windows could reuse that session): a wrong password,
+            # then a share the server doesn't have
+            $process = Start-Helper
+            Send $process (Map-Line $share 'not-the-password')
+            $answer = Read-Answer $process
+            Expect $answer 'failed'
+            if ($answer.code -ne 1326) { throw "a wrong password gave error $($answer.code), not 1326" }
+            $process = Start-Helper
+            Send $process (Map-Line 'NoSuchShare' $password)
+            $answer = Read-Answer $process
+            Expect $answer 'failed'
+            if ($answer.code -ne 67) { throw "a missing share gave error $($answer.code), not 67" }
+
+            # Mapped, readable through its letter and named for Explorer
+            $process = Start-Helper
+            Send $process (Map-Line $share $password)
+            $answer = Read-Answer $process
+            Expect $answer 'mapped'
+            $letter = $answer.letter
+            $content = Get-Content "${letter}:\hello.txt"
+            if ($content -ne 'from the share') { throw "read [$content] through ${letter}:" }
+            $label = (Get-ItemProperty $labelKey)._LabelFromReg
+            if ($label -ne 'CI Mac') { throw "Explorer's label is [$label]" }
+
+            # A file held open keeps the drive, until the removal is forced
+            $file = [System.IO.File]::Open("${letter}:\hello.txt", 'Open', 'Read', 'ReadWrite')
+            try {
+              Send $process '{"cmd":"unmap"}'
+              Expect (Read-Answer $process) 'in-use'
+              if (-not (Test-Path "${letter}:\")) { throw "${letter}: went with a file open" }
+              Send $process '{"cmd":"unmap","force":true}'
+              Expect (Read-Answer $process) 'unmapped'
+            } finally {
+              try { $file.Dispose() } catch { }
+            }
+            if (-not $process.WaitForExit(10000)) { throw "the helper didn't exit" }
+            if (Test-Path "${letter}:\") { throw "${letter}: is still there" }
+            if ($null -ne (Get-ItemProperty $labelKey -ErrorAction SilentlyContinue)._LabelFromReg) { throw "Explorer's label is still there" }
+
+            # Apollo stopping (the end of the helper's input) removes the drive
+            $process = Start-Helper
+            Send $process (Map-Line $share $password)
+            $answer = Read-Answer $process
+            Expect $answer 'mapped'
+            $letter = $answer.letter
+            $process.StandardInput.Close()
+            Expect (Read-Answer $process) 'unmapped'
+            if (-not $process.WaitForExit(10000)) { throw "the helper didn't exit" }
+            if (Test-Path "${letter}:\") { throw "${letter}: is still there after the helper's input ended" }
+            'The Mac drive helper fails, maps, names, keeps with files open and removes as expected'
+          } finally {
+            net share $share /delete /y 2>$null | Out-Null
+            net user $account /delete 2>$null | Out-Null
+          }
+          exit 0
+
       - name: Package
         shell: msys2 {0}
         run: |

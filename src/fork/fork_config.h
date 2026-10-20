@@ -51,6 +51,10 @@ namespace fork_tweaks {
   /// (src/fork/updater.*). Off, they download and wait for Install in the Web UI or LuzLunar.
   inline bool auto_update = false;
 
+  /// `fork_mac_drive`: on LAN streams, LuzLunar can have its Mac's disk mapped as a network drive in
+  /// the signed-in user's session, until shortly after the stream ends (mac_drive.h).
+  inline bool mac_network_drive = true;
+
   /**
    * @brief Read the fork-only options and remove them from @p vars, so they aren't reported as unrecognized.
    * @param vars The parsed sunshine.conf options.
