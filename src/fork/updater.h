@@ -37,7 +37,8 @@ namespace fork_tweaks::updater {
   std::string status_json();
 
   /**
-   * @brief Whether the helper is installing an update, so Apollo is about to stop (host_sleep.h waits).
+   * @brief Whether an update is installing, or about to (the app quitting, the helper starting), so
+   * Apollo is about to stop (host_sleep.h waits).
    */
   bool installing();
 

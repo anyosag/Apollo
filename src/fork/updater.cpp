@@ -82,6 +82,7 @@ namespace fork_tweaks::updater {
 
       fu::build_t running;
       fu::state_e state = fu::state_e::idle;
+      bool install_starting = false;  ///< [fork] Between deciding to install and the helper running (installing())
       std::string message;
       int64_t checked = 0;  ///< When the last check ended, in seconds since 1970
       std::optional<fu::manifest_t> latest;
@@ -439,6 +440,7 @@ namespace fork_tweaks::updater {
         previous = u().previous;
         running_version = u().running.version;
         u().install_requested = false;
+        u().install_starting = true;
       }
 
       // Checked again right before it's handed over
@@ -447,6 +449,7 @@ namespace fork_tweaks::updater {
         u().ready.reset();
         u().state = fu::state_e::failed;
         u().message = "The downloaded update changed on disk; it downloads again at the next check";
+        u().install_starting = false;
         return;
       }
       if (app_running) {
@@ -459,9 +462,12 @@ namespace fork_tweaks::updater {
       if (!launch_helper(update, previous, running_version, &why)) {
         BOOST_LOG(error) << "Update: "sv << why;
         set_state(fu::state_e::failed, "Couldn't install " + update.version + ": " + why);
+        std::lock_guard lock {u().mutex};
+        u().install_starting = false;
         return;
       }
       std::lock_guard lock {u().mutex};
+      u().install_starting = false;
       u().state = fu::state_e::installing;
       u().message = "Installing " + update.version + "; Apollo restarts in a moment";
       u().install_started = std::chrono::steady_clock::now();
@@ -599,7 +605,7 @@ namespace fork_tweaks::updater {
 
   bool installing() {
     std::lock_guard lock {u().mutex};
-    return u().state == fu::state_e::installing;
+    return u().state == fu::state_e::installing || u().install_starting;
   }
 
   std::string status_json() {
