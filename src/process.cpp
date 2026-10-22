@@ -1093,8 +1093,10 @@ namespace proc {
 
   void proc_t::terminate(bool immediate, bool needs_refresh) {
 #ifdef _WIN32
-    // [fork] Before anything changes the display it watches
+    // [fork] Before anything changes the display it watches; then a resume waits until the app's
+    // display is gone, rather than changing it as it goes
     stop_vdisplay_recovery();
+    std::unique_lock vdisplay_lock {vdisplay_mutex()};
 #endif
 
     std::error_code ec;

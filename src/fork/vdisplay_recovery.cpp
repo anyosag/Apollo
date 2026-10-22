@@ -14,11 +14,12 @@
 #include "vdisplay_recovery_policy.h"
 
 #ifdef _WIN32
+  // stream.h's Boost.Asio before misc.h's windows.h, which would bring in WinSock 1 first
+  #include "src/stream.h"
   #include "src/globals.h"
   #include "src/platform/windows/misc.h"
   #include "src/platform/windows/virtual_display.h"
   #include "src/process.h"
-  #include "src/rtsp.h"
 #endif
 
 using namespace std::literals;
@@ -116,9 +117,12 @@ namespace fork_tweaks::vdisplay_recovery {
       }
 
       // Between streams the display is the PC user's business, and so is it while the display
-      // shortcut has capture on another display
+      // shortcut has capture on another display. The session count takes no lock: RTSP's session
+      // list is held while a session ends, which can end the app and stop this monitor. Without a
+      // name (a re-create failed), the display isn't another one the shortcut picked.
       auto preferred = proc::proc.stream_display();
-      if (rtsp_stream::get_all_session_uuids().empty() || (!preferred.empty() && preferred != proc::proc.virtual_display_name())) {
+      auto vdisplay = proc::proc.virtual_display_name();
+      if (stream::session::running_count() == 0 || (!preferred.empty() && !vdisplay.empty() && preferred != vdisplay)) {
         decide.step(now, policy::presence_e::unknown, false);
         follow.reset();
         continue;

@@ -56,5 +56,8 @@ namespace stream {
     void join(session_t &session);
     state_e state(session_t &session);
     inline bool send(session_t& session, const std::string_view &payload);
+
+    /// [fork] How many sessions stream now, without taking any lock (fork/vdisplay_recovery.cpp)
+    unsigned running_count();
   }  // namespace session
 }  // namespace stream
