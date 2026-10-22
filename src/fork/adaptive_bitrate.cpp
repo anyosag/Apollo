@@ -13,9 +13,11 @@
 #include "adaptive_bitrate.h"
 #include "fork_config.h"
 #include "src/logging.h"
-// stream.h's Boost.Asio before rtsp.h's windows.h, which would bring in WinSock 1 first
-#include "src/stream.h"
+// As rtsp.cpp has them: network.h's Boost.Asio before rtsp.h's windows.h, which would bring in
+// WinSock 1 first, and rtsp.h before stream.h, which uses its launch_session_t
+#include "src/network.h"
 #include "src/rtsp.h"
+#include "src/stream.h"
 
 using namespace std::literals;
 
