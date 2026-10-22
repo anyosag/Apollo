@@ -64,6 +64,26 @@ namespace fork_tweaks::vdisplay_extend {
       }
     }
   }
+
+  bool switch_on(const std::string &virtual_id) {
+    auto device = make_device();
+
+    auto now = device.getCurrentTopology();
+    auto want = extend_layout::extended(now, now, virtual_id);
+    if (!want) {
+      return true;
+    }
+    BOOST_LOG(info) << "vdisplay: switching the virtual display on again: "sv << extend_layout::describe(now) << " are on, setting "sv << extend_layout::describe(*want);
+    if (!device.setTopology(*want)) {
+      BOOST_LOG(warning) << "vdisplay: Windows didn't switch the virtual display on again"sv;
+      return false;
+    }
+    return true;
+  }
+#else
+  bool switch_on(const std::string &) {
+    return false;
+  }
 #endif
 
   config::video_t display_config(const config::video_t &video) {

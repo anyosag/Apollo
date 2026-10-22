@@ -64,6 +64,10 @@ namespace fork_tweaks {
   /// encoders refuse.
   inline bool live_bitrate = true;
 
+  /// `fork_vdisplay_recovery`: bring the virtual display back when Windows switches it off or the
+  /// driver loses it mid-stream, and put capture back on it (vdisplay_recovery.h).
+  inline bool vdisplay_recovery_enabled = true;
+
   /**
    * @brief Read the fork-only options and remove them from @p vars, so they aren't reported as unrecognized.
    * @param vars The parsed sunshine.conf options.

@@ -54,6 +54,16 @@ namespace VDISPLAY {
 	bool removeVirtualDisplay(const GUID& guid);
 	// [fork] The GDI name the display with this GUID has now, or an empty name
 	std::wstring getVirtualDisplayName(const GUID& guid);
+
+	// [fork] Whether the display with this GUID is still there, for the recovery monitor
+	// (fork/vdisplay_recovery.h)
+	enum class PRESENCE {
+		UNKNOWN,   // The driver or Windows couldn't be asked
+		ACTIVE,    // The driver has it and Windows shows it; name is its GDI name
+		INACTIVE,  // The driver has it, but Windows switched it off
+		MISSING    // The driver doesn't have it any more
+	};
+	PRESENCE getVirtualDisplayPresence(const GUID& guid, std::wstring& name);
 	// [fork] Removes every display the driver has; returns how many
 	int removeAllVirtualDisplays();
 }

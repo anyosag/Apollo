@@ -50,5 +50,6 @@ namespace fork_tweaks {
     bool_option(vars, "fork_mac_drive", mac_network_drive);
     bool_option(vars, "fork_host_sleep", client_sleep);
     bool_option(vars, "fork_adaptive_bitrate", live_bitrate);
+    bool_option(vars, "fork_vdisplay_recovery", vdisplay_recovery_enabled);
   }
 }  // namespace fork_tweaks

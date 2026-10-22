@@ -13,6 +13,8 @@
 #endif
 
 // standard includes
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <unordered_map>
 
@@ -28,6 +30,7 @@
 #include "config.h"
 #include "fork/client_display.h"
 #include "fork/vdisplay_mode.h"
+#include "fork/vdisplay_recovery.h"
 #include "platform/common.h"
 #include "rtsp.h"
 #include "utility.h"
@@ -141,6 +144,16 @@ namespace proc {
     void pause();
     void terminate(bool immediate = false, bool needs_refresh = true);
 
+    /// [fork] display_name, read under a lock: capture reads it and the recovery monitor renames it
+    std::string stream_display();
+
+    /**
+     * @brief [fork] Capture moved to @p display: picked with the display shortcut (@p chosen), or
+     * the display it captured is gone. A virtual display that's gone for a moment stays the display
+     * to capture, so capture goes back to it once the recovery monitor brings it back.
+     */
+    void capture_moved(const std::string &display, bool chosen);
+
 #ifdef _WIN32
     /// [fork] What reconfigure_virtual_display() did
     enum class vdisplay_change_e {
@@ -156,6 +169,26 @@ namespace proc {
      * first client set it up.
      */
     vdisplay_change_e reconfigure_virtual_display(const rtsp_stream::launch_session_t &session);
+
+    /// [fork] For the recovery monitor (fork/vdisplay_recovery.h): held while it acts, and while a
+    /// resume changes the display; empty when one is changing it already
+    static std::unique_lock<std::recursive_mutex> try_lock_virtual_display();
+
+    /// [fork] The virtual display's GDI name, as last seen; display_name may be another display
+    /// picked with the shortcut. With the lock held.
+    std::string virtual_display_name() const;
+
+    /// [fork] Switches the virtual display on again after Windows switched it off. With the lock held.
+    bool reactivate_virtual_display();
+
+    /// [fork] Removes the virtual display and adds it again. With the lock held.
+    bool recreate_virtual_display();
+
+    /**
+     * @brief [fork] The virtual display is on as @p name: after it was off (@p was_off), or Windows
+     * renamed it. Gives it its mode, layout and HDR state again if they changed. With the lock held.
+     */
+    void virtual_display_back(const std::string &name, bool was_off);
 #endif
 
   private:
@@ -196,6 +229,23 @@ namespace proc {
 
     bool setup_virtual_display(const vdisplay_mode::display_mode_t &mode, const std::optional<client_display::screen_t> &screen, const GUID &guid, bool apply_mode);
     void apply_virtual_display_hdr(const std::string &display, bool enable_hdr, bool record_initial);
+
+    /// [fork] Re-creates the virtual display in @p want for @p session, then applies the launch's
+    /// display configuration again
+    vdisplay_change_e replug_virtual_display(const vdisplay_mode::display_mode_t &want, const rtsp_stream::launch_session_t &session, const char *why);
+
+    /// [fork] Whether a display configuration (display_device) applies to the launch
+    bool display_configured() const;
+
+    /// [fork] The virtual display as it was set up: its GDI name now, its display_device id, the
+    /// mode it should run and the monitor that brings it back (fork/vdisplay_recovery.h)
+    std::string _vdisplay_name;
+    std::string _vdisplay_id;
+    vdisplay_mode::display_mode_t _vdisplay_mode {};
+    std::unique_ptr<fork_tweaks::vdisplay_recovery::monitor_t> _vdisplay_recovery;
+
+    void start_vdisplay_recovery();
+    void stop_vdisplay_recovery();
 #endif
   };
 
