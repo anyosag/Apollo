@@ -544,18 +544,31 @@ namespace proc {
   // [fork] Applies the launch's display configuration. An extended desktop leaves the other
   // displays on and the primary display where it is, and with no virtual display to configure
   // leaves the displays alone: display_device would otherwise configure the primary one.
-  void proc_t::configure_launch_display(const rtsp_stream::launch_session_t &launch_session) {
-    // [fork] The virtual display runs at a multiple of the stream's rate, which the display
-    // configuration's automatic refresh rate would otherwise set it back to
-    auto session = launch_session;
-    if (virtual_display && _vdisplay_refresh_mhz) {
-      session.fps = (int) _vdisplay_refresh_mhz;
-    }
+  void proc_t::configure_launch_display(const rtsp_stream::launch_session_t &session) {
+    // [fork] display_device::configure_display(), but the virtual display keeps running at a multiple
+    // of the stream's rate, which the automatic refresh rate would set it back to. A rate the user
+    // set (a manual one, or a remapping) stays theirs.
+    auto configure_display = [&](const config::video_t &video_config) {
+      if (!virtual_display || !_vdisplay_refresh_mhz || session.fps <= 0) {
+        display_device::configure_display(video_config, session);
+        return;
+      }
+      auto result = display_device::parse_configuration(video_config, session);
+      if (auto *parsed = std::get_if<display_device::SingleDisplayConfiguration>(&result)) {
+        const display_device::FloatingPoint stream_rate {display_device::Rational {(unsigned int) session.fps, 1000}};
+        if (parsed->m_refresh_rate == stream_rate) {
+          parsed->m_refresh_rate = display_device::Rational {_vdisplay_refresh_mhz, 1000};
+        }
+        display_device::configure_display(*parsed);
+      } else if (std::holds_alternative<display_device::configuration_disabled_tag_t>(result)) {
+        display_device::revert_configuration();
+      }
+    };
 
     if (!extends_desktop()) {
-      display_device::configure_display(config::video, session);
+      configure_display(config::video);
     } else if (virtual_display && !config::video.output_name.empty()) {
-      display_device::configure_display(fork_tweaks::vdisplay_extend::display_config(config::video), session);
+      configure_display(fork_tweaks::vdisplay_extend::display_config(config::video));
     } else {
       BOOST_LOG(warning) << "vdisplay: no virtual display to extend the desktop with, the displays are left as they are"sv;
     }
