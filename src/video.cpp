@@ -1944,7 +1944,7 @@ namespace video {
     const encoder_t &encoder,
     void *channel_data
   ) {
-    // [fork] After a capture restart, the encoder starts at the bitrate LuzLunar changed to last
+    // [fork] The encoder starts at the bitrate LuzLunar started at (luzBitrate) or, after a capture restart, changed to last
     if (config.fork_bitrate) {
       config.bitrate = (int) fork_tweaks::adaptive_bitrate::restart_kbps(*config.fork_bitrate, config.bitrate);
     }
@@ -2185,6 +2185,11 @@ namespace video {
 
   std::optional<sync_session_t> make_synced_session(platf::display_t *disp, const encoder_t &encoder, platf::img_t &img, sync_session_ctx_t &ctx) {
     sync_session_t encode_session;
+
+    // [fork] The encoder starts at the bitrate LuzLunar started at or changed to last, as encode_run()'s
+    if (ctx.config.fork_bitrate) {
+      ctx.config.bitrate = (int) fork_tweaks::adaptive_bitrate::restart_kbps(*ctx.config.fork_bitrate, ctx.config.bitrate);
+    }
 
     encode_session.ctx = &ctx;
 

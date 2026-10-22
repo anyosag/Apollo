@@ -511,6 +511,9 @@ namespace nvhttp {
     // [fork] LuzLunar's Mac trackpad mode, which the stream turns on if this host offers it
     launch_session->mac_trackpad = get_arg(args, "luzTrackpad", "") == "mac"sv;
 
+    // [fork] LuzLunar's own bitrate, below the one it launches with (fork/adaptive_bitrate.h)
+    launch_session->luz_bitrate_kbps = fork_tweaks::adaptive_bitrate::parse_start_kbps(get_arg(args, "luzBitrate", "")).value_or(0);
+
     launch_session->client_do_cmds = named_cert_p->do_cmds;
     launch_session->client_undo_cmds = named_cert_p->undo_cmds;
 
@@ -1024,6 +1027,7 @@ namespace nvhttp {
       tree.put("root.LuzMacDrive", fork_tweaks::mac_drive::supported() ? 1 : 0);  // [fork] /actions/drive works
       tree.put("root.LuzSleep", fork_tweaks::host_sleep::supported() ? 1 : 0);  // [fork] /actions/sleep works
       tree.put("root.LuzBitrate", fork_tweaks::adaptive_bitrate::supported() ? 1 : 0);  // [fork] /actions/bitrate works
+      tree.put("root.LuzBitrateStart", fork_tweaks::adaptive_bitrate::supported() ? 1 : 0);  // [fork] and the stream starts at luzBitrate
       tree.put("root.VirtualDisplayCapable", true);
       if (!!(named_cert_p->perm & PERM::_all_actions)) {
         tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK);
