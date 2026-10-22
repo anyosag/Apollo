@@ -691,7 +691,8 @@ namespace proc {
     // Set virtual_display to true when everything went fine
     this->virtual_display = true;
     _vdisplay_name = platf::to_utf8(vdisplayName);
-    _vdisplay_mode = mode;
+    // [fork] The mode it runs, a slower rate it fell back to included: the one it gets when it comes back
+    _vdisplay_mode = running;
     {
       std::lock_guard lock {display_name_mutex()};
       this->display_name = _vdisplay_name;
@@ -848,6 +849,7 @@ namespace proc {
       }
       if (took) {
         _vdisplay_refresh_mhz = want.refresh_mhz;
+        _vdisplay_mode = want;
       }
       result = took ? vdisplay_change_e::mode_changed : replug("the display didn't take that mode");
     } else if (hdr_differs) {
