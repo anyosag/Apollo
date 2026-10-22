@@ -48,6 +48,7 @@
 #include "utils.h"
 #include "nvprefs/nvprefs_interface.h"
 #include "src/entry_handler.h"
+#include "src/fork/udp_send_win.h"  // [fork]
 #include "src/globals.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
@@ -1504,8 +1505,9 @@ namespace platf {
     msg.Control.len = cmbuflen;
 
     // If USO is not supported, this will fail and the caller will fall back to unbatched sends.
-    DWORD bytes_sent;
-    return WSASendMsg((SOCKET) send_info.native_socket, &msg, 0, &bytes_sent, nullptr, nullptr) != SOCKET_ERROR;
+    // [fork] Retried while Windows is out of send buffers; a batch that still can't go is logged
+    // and dropped instead of sent again packet by packet (fork/udp_send_win.h)
+    return fork_tweaks::udp_send::send_batch(send_info.native_socket, msg, send_info.block_count, send_info.header_size + send_info.payload_size, send_info.target_address.is_v6());
   }
 
   bool send(send_info_t &send_info) {
@@ -1578,14 +1580,8 @@ namespace platf {
 
     msg.Control.len = cmbuflen;
 
-    DWORD bytes_sent;
-    if (WSASendMsg((SOCKET) send_info.native_socket, &msg, 0, &bytes_sent, nullptr, nullptr) == SOCKET_ERROR) {
-      auto winerr = WSAGetLastError();
-      BOOST_LOG(warning) << "WSASendMsg() failed: "sv << winerr;
-      return false;
-    }
-
-    return true;
+    // [fork] Retried while Windows is out of send buffers; failures logged at most every 5 s (fork/udp_send_win.h)
+    return fork_tweaks::udp_send::send_one(send_info.native_socket, msg);
   }
 
   class qos_t: public deinit_t {

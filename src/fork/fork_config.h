@@ -55,6 +55,10 @@ namespace fork_tweaks {
   /// the signed-in user's session, until shortly after the stream ends (mac_drive.h).
   inline bool mac_network_drive = true;
 
+  /// `fork_host_sleep`: LuzLunar can put this PC to sleep, for clients with the Sleep PC permission,
+  /// quitting an app that's still running first; never while anything streams (host_sleep.h).
+  inline bool client_sleep = true;
+
   /**
    * @brief Read the fork-only options and remove them from @p vars, so they aren't reported as unrecognized.
    * @param vars The parsed sunshine.conf options.

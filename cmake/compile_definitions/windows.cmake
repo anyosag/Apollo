@@ -90,6 +90,7 @@ list(PREPEND PLATFORM_LIBRARIES
         libwinpthread.a
         minhook::minhook
         ntdll
+        powrprof  # [fork] Sleep PC from LuzLunar (src/fork/host_sleep.cpp)
         setupapi
         shlwapi
         synchronization.lib

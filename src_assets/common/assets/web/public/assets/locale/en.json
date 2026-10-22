@@ -529,6 +529,7 @@
     "server_cmd": "Server Command",
     "host_update": "Update Apollo",
     "client_drive": "Network Drive",
+    "host_sleep": "Sleep PC",
     "list": "List Apps",
     "view": "View Streams",
     "launch": "Launch Apps"

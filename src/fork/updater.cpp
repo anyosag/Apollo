@@ -597,6 +597,11 @@ namespace fork_tweaks::updater {
     return u().supported;
   }
 
+  bool installing() {
+    std::lock_guard lock {u().mutex};
+    return u().state == fu::state_e::installing;
+  }
+
   std::string status_json() {
     std::lock_guard lock {u().mutex};
     auto &s = u();
