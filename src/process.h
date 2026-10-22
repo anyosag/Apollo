@@ -181,6 +181,12 @@ namespace proc {
     std::vector<cmd_t>::const_iterator _app_prep_it;
     std::vector<cmd_t>::const_iterator _app_prep_begin;
 
+    /// [fork] The virtual display refreshes this many times per stream frame
+    /// (nv_stream_policy::refresh_multiplier()), for a stream at this rate, and runs at that refresh
+    int _vdisplay_multiplier = 1;
+    uint32_t _vdisplay_stream_mhz = 0;
+    uint32_t _vdisplay_refresh_mhz = 0;
+
 #ifdef _WIN32
     // [fork] The virtual display's identity, kept to re-create it on resume
     std::string _vdisplay_uuid;

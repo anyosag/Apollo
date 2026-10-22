@@ -27,6 +27,7 @@ extern "C" {
 #include "fork/fork_config.h"
 #include "fork/frame_loss.h"
 #include "fork/luztouchpad.h"
+#include "fork/nv_stream.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -2129,6 +2130,10 @@ namespace stream {
         }
 
         platf::streaming_will_stop();
+
+        // [fork] NVIDIA's frame cap and V-Sync off only while someone streams, so a game played at
+        // the PC between streams isn't capped
+        fork_tweaks::nv_stream::restore();
       }
 
       BOOST_LOG(debug) << "Session ended"sv;
@@ -2181,6 +2186,9 @@ namespace stream {
       if (++running_sessions == 1) {
         platf::streaming_will_start();
         proc::proc.resume();
+
+        // [fork] NVIDIA's frame cap and V-Sync off again after a resume, at this stream's rate
+        fork_tweaks::nv_stream::apply(proc::proc.get_running_app_uuid(), (uint32_t) session.config.monitor.encodingFramerate);
       }
 
       if (!session.do_cmds.empty()) {

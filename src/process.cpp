@@ -29,6 +29,9 @@
 #include "display_device.h"
 #include "file_handler.h"
 #include "fork/app_encoder_overrides.h"
+#include "fork/fork_config.h"
+#include "fork/nv_stream.h"
+#include "fork/nv_stream_policy.h"
 #include "logging.h"
 #include "platform/common.h"
 #include "process.h"
@@ -223,6 +226,12 @@ namespace proc {
     _launch_session = launch_session;
     allow_client_commands = app.allow_client_commands;
 
+    // [fork] NVIDIA's frame cap and V-Sync off for the stream, set before the app starts, as Smooth
+    // Motion needs. With games capped, the virtual display refreshes 4x per stream frame, else 2x.
+    _vdisplay_stream_mhz = vdisplay_mode::stream_mhz(launch_session->fps);
+    bool nv_capped = fork_tweaks::nv_stream::apply(app.uuid, _vdisplay_stream_mhz);
+    _vdisplay_multiplier = nv_stream_policy::refresh_multiplier(fork_tweaks::vdisplay_refresh_multiplier, nv_capped);
+
     // [fork] Shared with reconfigure_virtual_display(), in fork/vdisplay_mode.h
     int scale_factor = vdisplay_mode::effective_scale(launch_session->scale_factor, _app.scale_factor);
     auto vdisplay_target = vdisplay_mode::for_client(
@@ -230,7 +239,7 @@ namespace proc {
       launch_session->height,
       launch_session->fps,
       scale_factor,
-      config::video.double_refreshrate
+      _vdisplay_multiplier
     );
 
     uint32_t render_width = vdisplay_target.width;
@@ -535,7 +544,14 @@ namespace proc {
   // [fork] Applies the launch's display configuration. An extended desktop leaves the other
   // displays on and the primary display where it is, and with no virtual display to configure
   // leaves the displays alone: display_device would otherwise configure the primary one.
-  void proc_t::configure_launch_display(const rtsp_stream::launch_session_t &session) {
+  void proc_t::configure_launch_display(const rtsp_stream::launch_session_t &launch_session) {
+    // [fork] The virtual display runs at a multiple of the stream's rate, which the display
+    // configuration's automatic refresh rate would otherwise set it back to
+    auto session = launch_session;
+    if (virtual_display && _vdisplay_refresh_mhz) {
+      session.fps = (int) _vdisplay_refresh_mhz;
+    }
+
     if (!extends_desktop()) {
       display_device::configure_display(config::video, session);
     } else if (virtual_display && !config::video.output_name.empty()) {
@@ -550,7 +566,9 @@ namespace proc {
   bool proc_t::setup_virtual_display(const vdisplay_mode::display_mode_t &mode, const std::optional<client_display::screen_t> &screen, const GUID &guid, bool apply_mode) {
     luzvda_desc::guid_bytes_t guid_bytes;
     std::memcpy(guid_bytes.data(), &guid, guid_bytes.size());
-    auto desc = luzvda_desc::display(client_display::describe(screen, mode), _vdisplay_client_name, guid_bytes);
+    // [fork] With slower rates to fall back to, if Windows won't run this one
+    auto slower = vdisplay_mode::slower_rates(mode, _vdisplay_stream_mhz);
+    auto desc = luzvda_desc::display(client_display::describe(screen, mode, slower), _vdisplay_client_name, guid_bytes);
 
     // [fork] The displays on before the virtual display arrives stay on, for the Virtual Display app
     std::optional<fork_tweaks::vdisplay_extend::snapshot_t> extend_from;
@@ -594,20 +612,45 @@ namespace proc {
 
     // The display usually arrives in its preferred mode, the stream's; Windows restores another
     // only for a display it has seen before
+    auto running = mode;
     if (apply_mode) {
       int width = 0;
       int height = 0;
       int refresh_mhz = 0;
-      if (!VDISPLAY::getDisplayMode(vdisplayName.c_str(), width, height, refresh_mhz) || !vdisplay_mode::runs(mode, width, height, refresh_mhz)) {
+      auto runs = [&](const vdisplay_mode::display_mode_t &m) {
+        return VDISPLAY::getDisplayMode(vdisplayName.c_str(), width, height, refresh_mhz) && vdisplay_mode::runs(m, width, height, refresh_mhz);
+      };
+      if (!runs(mode)) {
         VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), mode.width, mode.height, mode.refresh_mhz);
+
+        // [fork] A slower multiple of the stream's rate if Windows won't run this one
+        for (auto rate : slower) {
+          if (runs(running)) {
+            break;
+          }
+          BOOST_LOG(warning) << "vdisplay: "sv << platf::to_utf8(vdisplayName) << " runs "sv << width << 'x' << height << 'x' << refresh_mhz
+                             << " mHz, not "sv << running.refresh_mhz << " mHz; trying "sv << rate << " mHz"sv;
+          running.refresh_mhz = rate;
+          VDISPLAY::changeDisplaySettings(vdisplayName.c_str(), running.width, running.height, running.refresh_mhz);
+        }
+        if (!runs(running)) {
+          BOOST_LOG(warning) << "vdisplay: "sv << platf::to_utf8(vdisplayName) << " runs "sv << width << 'x' << height << 'x' << refresh_mhz
+                             << " mHz, not "sv << running.refresh_mhz << " mHz"sv;
+          if (refresh_mhz > 0) {
+            running.refresh_mhz = refresh_mhz;
+          }
+        }
       }
     }
+    _vdisplay_refresh_mhz = running.refresh_mhz;
+    BOOST_LOG(info) << "vdisplay: Display refresh rate "sv << running.refresh_mhz / 1000.0 << " Hz, "sv
+                    << (_vdisplay_stream_mhz ? running.refresh_mhz / (double) _vdisplay_stream_mhz : 1.0) << "x the stream's"sv;
 
     // Check the ISOLATED DISPLAY configuration setting and rearrange the displays
     // [fork] Not for an extended desktop, which the mouse is meant to cross into
     if (config::video.isolated_virtual_display_option == true && !extend_from) {
       // Apply the isolated display settings
-      VDISPLAY::changeDisplaySettings2(vdisplayName.c_str(), mode.width, mode.height, mode.refresh_mhz, true);
+      VDISPLAY::changeDisplaySettings2(vdisplayName.c_str(), running.width, running.height, running.refresh_mhz, true);
     }
 
     // Set virtual_display to true when everything went fine
@@ -676,7 +719,8 @@ namespace proc {
     VDISPLAY::takeModeStats();
 
     int scale_factor = vdisplay_mode::effective_scale(session.scale_factor, _app.scale_factor);
-    auto want = vdisplay_mode::for_client(session.width, session.height, session.fps, scale_factor, config::video.double_refreshrate);
+    auto want = vdisplay_mode::for_client(session.width, session.height, session.fps, scale_factor, _vdisplay_multiplier);
+    _vdisplay_stream_mhz = vdisplay_mode::stream_mhz(session.fps);
 
     auto displayW = platf::from_utf8(display_name);
     int width = 0;
@@ -691,7 +735,7 @@ namespace proc {
     // when it arrives, so another screen needs it to arrive again; another mode doesn't.
     luzvda_desc::guid_bytes_t guid_bytes;
     std::memcpy(guid_bytes.data(), &_launch_session->display_guid, guid_bytes.size());
-    auto desc = luzvda_desc::display(client_display::describe(session.client_screen, want), _vdisplay_client_name, guid_bytes);
+    auto desc = luzvda_desc::display(client_display::describe(session.client_screen, want, vdisplay_mode::slower_rates(want, _vdisplay_stream_mhz)), _vdisplay_client_name, guid_bytes);
     bool same_screen = luzvda_desc::same_screen(_vdisplay_desc, desc);
 
     auto replug = [&](const char *why) {
@@ -742,6 +786,9 @@ namespace proc {
           }
           BOOST_LOG(info) << "vdisplay: "sv << display_name << " runs "sv << width << 'x' << height << 'x' << refresh_mhz << " mHz after the change"sv;
         }
+      }
+      if (took) {
+        _vdisplay_refresh_mhz = want.refresh_mhz;
       }
       result = took ? vdisplay_change_e::mode_changed : replug("the display didn't take that mode");
     } else if (hdr_differs) {
@@ -1024,6 +1071,10 @@ namespace proc {
     }
 
     fork_tweaks::restore_app_encoder_overrides();
+
+    // [fork] Puts back NVIDIA's settings once the app has quit
+    fork_tweaks::nv_stream::restore();
+    _vdisplay_refresh_mhz = 0;
 
     if (needs_refresh) {
       refresh(config::stream.file_apps, false);
