@@ -12,6 +12,7 @@
 #include "config.h"
 #include "confighttp.h"
 #include "entry_handler.h"
+#include "fork/nv_stream.h"  // [fork]
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
@@ -61,6 +62,8 @@ namespace args {
       nvprefs_instance.restore_from_and_delete_undo_file_if_exists();
       nvprefs_instance.unload();
     }
+    // [fork] And what a stream changed, if Apollo stopped mid-stream (fork/nv_stream.h)
+    fork_tweaks::nv_stream::recover();
     return 0;
   }
 #endif

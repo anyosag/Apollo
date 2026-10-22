@@ -68,6 +68,20 @@ namespace fork_tweaks {
   /// driver loses it mid-stream, and put capture back on it (vdisplay_recovery.h).
   inline bool vdisplay_recovery_enabled = true;
 
+  /// `fork_nv_stream_settings`: from a stream's launch until its app quits, NVIDIA's driver caps games
+  /// at the stream's frame rate with V-Sync off, and gives Smooth Motion to apps that ask for it
+  /// (nv_stream.h).
+  inline bool nv_stream_settings = true;
+
+  /// `fork_vdisplay_refresh_multiplier` (1, 2 or 4): the virtual display refreshes this many times
+  /// per stream frame; 4 only while games are capped, else 2 (nv_stream_policy::refresh_multiplier()).
+  /// Replaces `double_refreshrate`.
+  inline int vdisplay_refresh_multiplier = 4;
+
+  /// `fork_smooth_motion_half_cap`: a Smooth Motion app is capped at half the stream's rate rather
+  /// than the stream's, for a driver that caps the frames the game renders rather than those it shows.
+  inline bool smooth_motion_half_cap = false;
+
   /**
    * @brief Read the fork-only options and remove them from @p vars, so they aren't reported as unrecognized.
    * @param vars The parsed sunshine.conf options.

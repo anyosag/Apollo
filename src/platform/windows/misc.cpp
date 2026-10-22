@@ -49,6 +49,7 @@
 #include "nvprefs/nvprefs_interface.h"
 #include "src/entry_handler.h"
 #include "src/fork/udp_send_win.h"  // [fork]
+#include "src/fork/nv_stream.h"  // [fork]
 #include "src/globals.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
@@ -1152,6 +1153,8 @@ namespace platf {
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
 
     // Modify NVIDIA control panel settings again, in case they have been changed externally since sunshine launch
+    // [fork] NVAPI's wrapper isn't thread-safe, and fork/nv_stream.cpp uses it from other threads
+    std::unique_lock nvapi_lock {fork_tweaks::nv_stream::nvapi_mutex()};
     if (nvprefs_instance.load()) {
       if (!nvprefs_instance.owning_undo_file()) {
         nvprefs_instance.restore_from_and_delete_undo_file_if_exists();
@@ -1160,6 +1163,7 @@ namespace platf {
       nvprefs_instance.modify_global_profile();
       nvprefs_instance.unload();
     }
+    nvapi_lock.unlock();
 
     // Enable low latency mode on all connected WLAN NICs if wlanapi.dll is available
     if (fn_WlanOpenHandle) {

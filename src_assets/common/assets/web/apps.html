@@ -386,6 +386,22 @@
                   v-model="editForm['virtual-display']"
                   default="false"
         ></Checkbox>
+        <!-- [fork] NVIDIA's frame cap and V-Sync off while this app streams (fork/nv_stream.h) -->
+        <Checkbox class="mb-3"
+                  id="forkNvCap"
+                  label="apps.fork_nv_cap"
+                  desc="apps.fork_nv_cap_desc"
+                  v-model="editForm['fork-nv-cap']"
+                  default="true"
+        ></Checkbox>
+        <!-- [fork] NVIDIA Smooth Motion while this app streams -->
+        <Checkbox class="mb-3"
+                  id="forkSmoothMotion"
+                  label="apps.fork_smooth_motion"
+                  desc="apps.fork_smooth_motion_desc"
+                  v-model="editForm['fork-smooth-motion']"
+                  default="false"
+        ></Checkbox>
         <!-- use app identity -->
         <Checkbox class="mb-3"
                   id="useAppIdentity"
@@ -547,6 +563,8 @@
     "per-client-app-identity": false,
     "allow-client-commands": true,
     "virtual-display": false,
+    "fork-nv-cap": true,
+    "fork-smooth-motion": false,
     "terminate-on-pause": false,
     "gamepad": ""
   }

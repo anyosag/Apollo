@@ -88,7 +88,9 @@ namespace nvprefs {
         if (pimpl->driver_settings.restore_global_profile_to_undo(*undo_data) && pimpl->driver_settings.save_settings()) {
           info_message("Restored global profile settings from undo file - deleting the file");
         } else {
-          error_message("Failed to restore global profile settings from undo file, deleting the file anyway");
+          // [fork] The file holds the only copy of the user's value, so it stays for the next try
+          error_message("Failed to restore global profile settings from undo file, keeping the file for the next try");
+          return false;
         }
       } else {
         error_message("Coulnd't read undo file, deleting the file anyway");
