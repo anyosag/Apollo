@@ -59,6 +59,11 @@ namespace fork_tweaks {
   /// quitting an app that's still running first; never while anything streams (host_sleep.h).
   inline bool client_sleep = true;
 
+  /// `fork_adaptive_bitrate`: LuzLunar can lower its stream's bitrate while it runs, and raise it back
+  /// to the bitrate it launched with (adaptive_bitrate.h). NVENC changes it without a keyframe; other
+  /// encoders refuse.
+  inline bool live_bitrate = true;
+
   /**
    * @brief Read the fork-only options and remove them from @p vars, so they aren't reported as unrecognized.
    * @param vars The parsed sunshine.conf options.

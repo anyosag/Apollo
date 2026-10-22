@@ -69,6 +69,14 @@ namespace nvenc {
      */
     bool invalidate_ref_frames(uint64_t first_frame, uint64_t last_frame);
 
+    /**
+     * @brief [fork] Change the bitrate between two frames with `nvEncReconfigureEncoder()`, without a
+     *        keyframe, keeping everything else as `create_encoder()` set it (fork/adaptive_bitrate.h).
+     * @param bitrate_kbps The new encoder bitrate.
+     * @return Whether it changed; if not, the bitrate stays as it was, for good if the GPU can't.
+     */
+    fork_tweaks::adaptive_bitrate::change_e set_bitrate(int bitrate_kbps);
+
   protected:
     /**
      * @brief Required. Used for loading NvEnc library and setting `nvenc` variable with `NvEncodeAPICreateInstance()`.
@@ -143,6 +151,16 @@ namespace nvenc {
   private:
     NV_ENC_OUTPUT_PTR output_bitstream = nullptr;
     uint32_t minimum_api_version = 0;
+
+    /// [fork] What create_encoder() initialized the encoder with, for set_bitrate()
+    struct {
+      NV_ENC_INITIALIZE_PARAMS init_params = {};  ///< Its encodeConfig points at enc_config below
+      NV_ENC_CONFIG enc_config = {};
+      bool dynamic_bitrate = false;  ///< NV_ENC_CAPS_SUPPORT_DYN_BITRATE_CHANGE
+      bool custom_vbv = false;  ///< The VBV size was set, NV_ENC_CAPS_SUPPORT_CUSTOM_VBV_BUF_SIZE
+      int vbv_percentage_increase = 0;
+      uint32_t framerate = 0;
+    } fork_reconfigure;
 
     struct {
       uint64_t last_encoded_frame_index = 0;

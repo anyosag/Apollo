@@ -2208,6 +2208,11 @@ namespace stream {
       return 0;
     }
 
+    // [fork] fork/adaptive_bitrate.h
+    std::shared_ptr<fork_tweaks::adaptive_bitrate::live_t> fork_bitrate(session_t &session) {
+      return session.config.monitor.fork_bitrate;
+    }
+
     std::shared_ptr<session_t> alloc(config_t &config, rtsp_stream::launch_session_t &launch_session) {
       auto session = std::make_shared<session_t>();
 

@@ -427,6 +427,14 @@ namespace video {
       }
     }
 
+    // [fork] NVENC reconfigures in place (fork/adaptive_bitrate.h)
+    fork_tweaks::adaptive_bitrate::change_e set_bitrate(int kbps) override {
+      if (!device || !device->nvenc) {
+        return fork_tweaks::adaptive_bitrate::change_e::unsupported;
+      }
+      return device->nvenc->set_bitrate(kbps);
+    }
+
     nvenc::nvenc_encoded_frame encode_frame(uint64_t frame_index) {
       if (!device || !device->nvenc) {
         return {};
@@ -1918,6 +1926,11 @@ namespace video {
     const encoder_t &encoder,
     void *channel_data
   ) {
+    // [fork] After a capture restart, the encoder starts at the bitrate LuzLunar changed to last
+    if (config.fork_bitrate) {
+      config.bitrate = (int) fork_tweaks::adaptive_bitrate::restart_kbps(*config.fork_bitrate, config.bitrate);
+    }
+
     auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(encode_device));
     if (!session) {
       fork_tweaks::invalidate_encoder_probe("encoder session creation failed during a stream");
@@ -2014,6 +2027,13 @@ namespace video {
 
       if (requested_idr_frame) {
         session->request_idr_frame();
+      }
+
+      // [fork] A bitrate LuzLunar asked for, between two frames
+      if (config.fork_bitrate) {
+        fork_tweaks::adaptive_bitrate::apply(*config.fork_bitrate, config.bitrate, [&session](int kbps) {
+          return session->set_bitrate(kbps);
+        });
       }
 
       std::optional<std::chrono::steady_clock::time_point> frame_timestamp;

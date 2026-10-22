@@ -5,6 +5,7 @@
 #pragma once
 
 // local includes
+#include "fork/adaptive_bitrate.h"  // [fork]
 #include "input.h"
 #include "platform/common.h"
 #include "thread_safe.h"
@@ -48,6 +49,9 @@ namespace video {
 
     int encodingFramerate; // Requested display framerate
     bool input_only;
+
+    /// [fork] LuzLunar's bitrate changes while the stream runs (fork/adaptive_bitrate.h); null for none
+    std::shared_ptr<fork_tweaks::adaptive_bitrate::live_t> fork_bitrate;
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);
@@ -213,6 +217,11 @@ namespace video {
     virtual void request_normal_frame() = 0;
 
     virtual void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) = 0;
+
+    /// [fork] Change the bitrate between two frames, without a keyframe
+    virtual fork_tweaks::adaptive_bitrate::change_e set_bitrate([[maybe_unused]] int kbps) {
+      return fork_tweaks::adaptive_bitrate::change_e::unsupported;
+    }
   };
 
   // encoders
