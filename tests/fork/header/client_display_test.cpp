@@ -128,6 +128,16 @@ static void test_describe_macbook() {
   CHECK(has(d, {1512, 982, 120000}));
   CHECK(has(d, {3024, 1890, 120000}));
   CHECK(d.modes.size() == 6);
+
+  // 4x the stream's 120 Hz, with 2x and 1x to fall back to in each shape
+  d = describe(s, {3024, 1964, 480000}, {240000, 120000});
+  CHECK((d.modes[d.preferred] == display_mode_t {3024, 1964, 480000}));
+  CHECK((d.modes[1] == display_mode_t {3024, 1964, 240000}));
+  CHECK(has(d, {3024, 1964, 120000}));
+  CHECK(has(d, {3024, 1890, 480000}));
+  CHECK(has(d, {3024, 1890, 240000}));
+  CHECK(has(d, {3024, 1890, 60000}));
+  CHECK(d.modes.size() == 8);
 }
 
 static void test_describe_defaults() {

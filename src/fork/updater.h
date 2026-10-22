@@ -37,6 +37,12 @@ namespace fork_tweaks::updater {
   std::string status_json();
 
   /**
+   * @brief Whether an update is installing, or about to (the app quitting, the helper starting), so
+   * Apollo is about to stop (host_sleep.h waits).
+   */
+  bool installing();
+
+  /**
    * @brief Ask the updater to do something.
    * @param action "check", "install" or empty.
    * @param automatic When set, turn automatic updates on or off (saved as `fork_auto_update`).

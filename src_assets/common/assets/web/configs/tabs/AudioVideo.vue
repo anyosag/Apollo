@@ -152,12 +152,23 @@ const validateFallbackMode = (event) => {
               v-if="platform === 'windows'"
     ></Checkbox>
 
-    <!-- Double Refreshrate -->
+    <!-- [fork] The virtual display's refresh rate, a multiple of the stream's; replaces Double Refreshrate -->
+    <div class="mb-3" v-if="platform === 'windows'">
+      <label for="fork_vdisplay_refresh_multiplier" class="form-label">{{ $t('config.fork_vdisplay_refresh_multiplier') }}</label>
+      <select id="fork_vdisplay_refresh_multiplier" class="form-select" v-model="config.fork_vdisplay_refresh_multiplier">
+        <option value="4">{{ $t('config.fork_vdisplay_refresh_multiplier_4') }}</option>
+        <option value="2">{{ $t('config.fork_vdisplay_refresh_multiplier_2') }}</option>
+        <option value="1">{{ $t('config.fork_vdisplay_refresh_multiplier_1') }}</option>
+      </select>
+      <div class="form-text">{{ $t('config.fork_vdisplay_refresh_multiplier_desc') }}</div>
+    </div>
+
+    <!-- [fork] NVIDIA's frame cap and V-Sync off while streaming -->
     <Checkbox class="mb-3"
-              id="double_refreshrate"
+              id="fork_nv_stream_settings"
               locale-prefix="config"
-              v-model="config.double_refreshrate"
-              default="false"
+              v-model="config.fork_nv_stream_settings"
+              default="true"
               v-if="platform === 'windows'"
     ></Checkbox>
 

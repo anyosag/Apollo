@@ -1,7 +1,7 @@
 /**
  * @file src/fork/vdisplay_mode.h
- * @brief The mode Apollo gives a virtual display: the client's size times the scale factor, at the
- * client's frame rate in millihertz.
+ * @brief The mode Apollo gives a virtual display: the client's size times the scale factor, at a
+ * multiple of the client's frame rate in millihertz.
  *
  * Header-only, without Boost, so tests can build it on its own.
  */
@@ -10,6 +10,7 @@
 // standard includes
 #include <cstdint>
 #include <cstdlib>
+#include <vector>
 
 namespace vdisplay_mode {
   struct display_mode_t {
@@ -19,6 +20,11 @@ namespace vdisplay_mode {
 
     bool operator==(const display_mode_t &) const = default;
   };
+
+  /// LuzVDA refuses a display with any mode faster than this
+  constexpr uint32_t max_hz = 500;
+  /// The driver refuses a display with any mode faster than this: 7680x4320 at 240 Hz, with room
+  constexpr uint64_t max_pixels_per_second = 8000000000ull;
 
   /// Scale factors in percent outside this range are treated as 100, so a bad client value can't
   /// ask for an empty or enormous display
@@ -34,14 +40,28 @@ namespace vdisplay_mode {
   }
 
   /**
+   * @brief The client's frame rate in millihertz.
+   * @param client_fps 0 or less means 60 Hz, and values under 1000 are taken as hertz.
+   */
+  inline uint32_t stream_mhz(int client_fps) {
+    int fps = client_fps > 0 ? client_fps : 60000;
+    return (uint32_t) (fps < 1000 ? fps * 1000 : fps);
+  }
+
+  /// Whether the driver takes a mode this size at this rate
+  inline bool within_limits(uint32_t width, uint32_t height, uint64_t refresh_mhz) {
+    return refresh_mhz <= max_hz * 1000ull && (uint64_t) width * height * refresh_mhz / 1000 <= max_pixels_per_second;
+  }
+
+  /**
    * @brief The virtual display's mode for a client.
    * @param client_width, client_height The size the client asked for; 0 means 1920x1080.
-   * @param client_fps The frame rate the client asked for, in millihertz; 0 or less means 60 Hz,
-   * and values under 1000 are taken as hertz.
+   * @param client_fps The frame rate the client asked for, in millihertz (see `stream_mhz()`).
    * @param scale The scale factor in percent, from `effective_scale()`.
-   * @param double_refresh Apollo's `double_refreshrate` option.
+   * @param multiplier The display refreshes this many times per stream frame (1, 2 or 4), or half
+   * as many, or a quarter, if the driver doesn't take that; see nv_stream_policy::refresh_multiplier().
    */
-  inline display_mode_t for_client(uint32_t client_width, uint32_t client_height, int client_fps, int scale, bool double_refresh) {
+  inline display_mode_t for_client(uint32_t client_width, uint32_t client_height, int client_fps, int scale, int multiplier) {
     uint32_t width = client_width ? client_width : 1920;
     uint32_t height = client_height ? client_height : 1080;
 
@@ -55,15 +75,33 @@ namespace vdisplay_mode {
       height &= ~1u;
     }
 
-    int fps = client_fps > 0 ? client_fps : 60000;
-    if (fps < 1000) {
-      fps *= 1000;
+    uint32_t fps = stream_mhz(client_fps);
+    if (multiplier < 1) {
+      multiplier = 1;
     }
-    if (double_refresh) {
-      fps *= 2;
+    while (multiplier > 1 && !within_limits(width, height, (uint64_t) fps * multiplier)) {
+      multiplier /= 2;
     }
 
-    return {width, height, (uint32_t) fps};
+    return {width, height, fps * multiplier};
+  }
+
+  /**
+   * @brief Slower rates for a display Windows won't run at `mode`'s, fastest first: twice the
+   * stream's rate, then the stream's, as long as they're slower than `mode`'s.
+   * @param stream The stream's rate in millihertz (`stream_mhz()`).
+   */
+  inline std::vector<uint32_t> slower_rates(const display_mode_t &mode, uint32_t stream) {
+    std::vector<uint32_t> rates;
+    if (!stream) {
+      return rates;
+    }
+    for (uint64_t rate : {(uint64_t) stream * 2, (uint64_t) stream}) {
+      if (rate < mode.refresh_mhz) {
+        rates.push_back((uint32_t) rate);
+      }
+    }
+    return rates;
   }
 
   /**

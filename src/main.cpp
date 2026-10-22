@@ -12,6 +12,7 @@
 #include "confighttp.h"
 #include "display_device.h"
 #include "entry_handler.h"
+#include "fork/nv_stream.h"  // [fork]
 #include "fork/pointer_speed.h"  // [fork]
 #include "fork/tablet_posture.h"  // [fork]
 #include "fork/updater.h"  // [fork]
@@ -229,6 +230,9 @@ int main(int argc, char *argv[]) {
     // Unload dynamic library to survive driver re-installation
     nvprefs_instance.unload();
   }
+
+  // [fork] Puts back the frame cap, V-Sync and Smooth Motion a run that stopped mid-stream left on
+  fork_tweaks::nv_stream::recover();
 
   // Wait as long as possible to terminate Sunshine.exe during logoff/shutdown
   SetProcessShutdownParameters(0x100, SHUTDOWN_NORETRY);
@@ -481,9 +485,13 @@ int main(int argc, char *argv[]) {
 
 #ifdef _WIN32
   // Restore global NVIDIA control panel settings
-  if (nvprefs_instance.owning_undo_file() && nvprefs_instance.load()) {
-    nvprefs_instance.restore_global_profile();
-    nvprefs_instance.unload();
+  {
+    // [fork] Not while fork/nv_stream.cpp has NVAPI loaded (a late terminate())
+    std::lock_guard nvapi_lock {fork_tweaks::nv_stream::nvapi_mutex()};
+    if (nvprefs_instance.owning_undo_file() && nvprefs_instance.load()) {
+      nvprefs_instance.restore_global_profile();
+      nvprefs_instance.unload();
+    }
   }
 
   // Stop the threaded tray if it was started

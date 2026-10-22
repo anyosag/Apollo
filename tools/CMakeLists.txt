@@ -53,3 +53,15 @@ target_link_libraries(apollo-touch-keyboard
         user32
         ${PLATFORM_LIBRARIES})
 target_compile_options(apollo-touch-keyboard PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
+
+# [fork] Maps LuzLunar's Mac as a network drive for the signed-in user (src/fork/mac_drive.cpp starts it)
+add_executable(apollo-mac-drive apollo-mac-drive.cpp)
+set_target_properties(apollo-mac-drive PROPERTIES CXX_STANDARD 23)
+target_link_libraries(apollo-mac-drive
+        ${CMAKE_THREAD_LIBS_INIT}
+        advapi32
+        mpr
+        nlohmann_json::nlohmann_json
+        shell32
+        ${PLATFORM_LIBRARIES})
+target_compile_options(apollo-mac-drive PRIVATE ${SUNSHINE_COMPILE_OPTIONS})

@@ -56,5 +56,11 @@ namespace stream {
     void join(session_t &session);
     state_e state(session_t &session);
     inline bool send(session_t& session, const std::string_view &payload);
+
+    /// [fork] The session's bitrate changes while it runs (fork/adaptive_bitrate.h); null for none
+    std::shared_ptr<fork_tweaks::adaptive_bitrate::live_t> fork_bitrate(session_t &session);
+
+    /// [fork] How many sessions stream now, without taking any lock (fork/vdisplay_recovery.cpp)
+    unsigned running_count();
   }  // namespace session
 }  // namespace stream

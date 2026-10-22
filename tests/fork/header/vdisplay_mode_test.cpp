@@ -36,23 +36,55 @@ static void test_scale() {
 
 static void test_mode() {
   // MacBook Pro 14": full panel and below the notch
-  CHECK((for_client(3024, 1964, 120000, 100, false) == display_mode_t {3024, 1964, 120000}));
-  CHECK((for_client(3024, 1890, 60000, 100, false) == display_mode_t {3024, 1890, 60000}));
+  CHECK((for_client(3024, 1964, 120000, 100, 1) == display_mode_t {3024, 1964, 120000}));
+  CHECK((for_client(3024, 1890, 60000, 100, 1) == display_mode_t {3024, 1890, 60000}));
 
   // Defaults
-  CHECK((for_client(0, 0, 0, 100, false) == display_mode_t {1920, 1080, 60000}));
-  CHECK((for_client(1920, 1080, -5, 100, false) == display_mode_t {1920, 1080, 60000}));
+  CHECK((for_client(0, 0, 0, 100, 1) == display_mode_t {1920, 1080, 60000}));
+  CHECK((for_client(1920, 1080, -5, 100, 1) == display_mode_t {1920, 1080, 60000}));
 
   // Hertz from old clients
-  CHECK((for_client(1920, 1080, 60, 100, false) == display_mode_t {1920, 1080, 60000}));
+  CHECK((for_client(1920, 1080, 60, 100, 1) == display_mode_t {1920, 1080, 60000}));
 
   // Scaled, rounded down to even
-  CHECK((for_client(3024, 1964, 60000, 50, false) == display_mode_t {1512, 982, 60000}));
-  CHECK((for_client(1366, 768, 60000, 75, false) == display_mode_t {1024, 576, 60000}));
-  CHECK((for_client(1001, 1001, 60000, 150, false) == display_mode_t {1500, 1500, 60000}));
+  CHECK((for_client(3024, 1964, 60000, 50, 1) == display_mode_t {1512, 982, 60000}));
+  CHECK((for_client(1366, 768, 60000, 75, 1) == display_mode_t {1024, 576, 60000}));
+  CHECK((for_client(1001, 1001, 60000, 150, 1) == display_mode_t {1500, 1500, 60000}));
 
-  // Fractional rates and doubling
-  CHECK((for_client(1920, 1080, 59940, 100, true) == display_mode_t {1920, 1080, 119880}));
+  // Fractional rates and multiples
+  CHECK((for_client(1920, 1080, 59940, 100, 2) == display_mode_t {1920, 1080, 119880}));
+  CHECK((for_client(3024, 1964, 120000, 100, 4) == display_mode_t {3024, 1964, 480000}));
+  CHECK((for_client(3840, 2160, 120000, 100, 4) == display_mode_t {3840, 2160, 480000}));
+  CHECK((for_client(1920, 1080, 0, 100, 4) == display_mode_t {1920, 1080, 240000}));
+  CHECK((for_client(1920, 1080, 120000, 100, 0) == display_mode_t {1920, 1080, 120000}));
+
+  // Above 500 Hz, or 8 billion pixels a second, the multiple halves until the driver takes it
+  CHECK((for_client(2560, 1440, 144000, 100, 4) == display_mode_t {2560, 1440, 288000}));
+  CHECK((for_client(1920, 1080, 240000, 100, 4) == display_mode_t {1920, 1080, 480000}));
+  CHECK((for_client(1920, 1080, 360000, 100, 4) == display_mode_t {1920, 1080, 360000}));
+  CHECK((for_client(7680, 4320, 120000, 100, 4) == display_mode_t {7680, 4320, 240000}));
+  CHECK((for_client(7680, 4320, 240000, 100, 2) == display_mode_t {7680, 4320, 240000}));
+}
+
+static void test_stream_rate() {
+  CHECK(stream_mhz(120000) == 120000);
+  CHECK(stream_mhz(59940) == 59940);
+  CHECK(stream_mhz(60) == 60000);
+  CHECK(stream_mhz(0) == 60000);
+  CHECK(stream_mhz(-1) == 60000);
+
+  CHECK(within_limits(1920, 1080, 500000));
+  CHECK(!within_limits(1920, 1080, 500001));
+  CHECK(within_limits(7680, 4320, 240000));
+  CHECK(!within_limits(7680, 4320, 241200));
+}
+
+static void test_slower() {
+  // 4x falls back to 2x, then 1x
+  CHECK((slower_rates({3024, 1964, 480000}, 120000) == std::vector<uint32_t> {240000, 120000}));
+  CHECK((slower_rates({3024, 1964, 240000}, 120000) == std::vector<uint32_t> {120000}));
+  CHECK(slower_rates({3024, 1964, 120000}, 120000).empty());
+  CHECK(slower_rates({3024, 1964, 480000}, 0).empty());
 }
 
 static void test_runs() {
@@ -68,6 +100,8 @@ static void test_runs() {
 int main() {
   test_scale();
   test_mode();
+  test_stream_rate();
+  test_slower();
   test_runs();
 
   if (s_Failures) {

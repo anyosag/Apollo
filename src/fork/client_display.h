@@ -66,9 +66,9 @@ namespace client_display {
   constexpr uint32_t min_dimension = 320;
   constexpr uint32_t max_dimension = 8192;
   constexpr uint32_t max_size_mm = 2000;
-  constexpr uint32_t max_hz = 500;
+  constexpr uint32_t max_hz = vdisplay_mode::max_hz;
   /// The driver refuses a display with any mode faster than this: 7680x4320 at 240 Hz, with room
-  constexpr uint64_t max_pixels_per_second = 8000000000ull;
+  constexpr uint64_t max_pixels_per_second = vdisplay_mode::max_pixels_per_second;
   constexpr uint32_t max_nits = 10000;
   constexpr std::size_t max_name_bytes = 63;
   constexpr std::size_t max_modes = 32;
@@ -247,12 +247,15 @@ namespace client_display {
    * fastest and 60 Hz. A resume on the same screen at another shape or rate is then a mode change,
    * since the driver can't add modes to a display once Windows has it.
    * @param render The mode the stream renders at (vdisplay_mode::for_client()).
+   * @param slower Rates to fall back to if Windows won't run `render`'s (vdisplay_mode::slower_rates()),
+   * offered right after it.
    */
-  inline description_t describe(const std::optional<screen_t> &screen, const vdisplay_mode::display_mode_t &render) {
+  inline description_t describe(const std::optional<screen_t> &screen, const vdisplay_mode::display_mode_t &render, const std::vector<uint32_t> &slower = {}) {
     description_t d;
 
     std::vector<std::pair<uint32_t, uint32_t>> shapes {{render.width, render.height}};
     std::vector<uint32_t> rates {render.refresh_mhz};
+    rates.insert(rates.end(), slower.begin(), slower.end());
 
     if (!screen) {
       d.width_mm = default_width_mm;

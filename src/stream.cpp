@@ -27,6 +27,7 @@ extern "C" {
 #include "fork/fork_config.h"
 #include "fork/frame_loss.h"
 #include "fork/luztouchpad.h"
+#include "fork/nv_stream.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -615,6 +616,9 @@ namespace stream {
           break;
         case ENET_EVENT_TYPE_CONNECT:
           BOOST_LOG(info) << "CLIENT CONNECTED"sv;
+          // [fork] Wait as long for a quiet client as Moonlight waits for us (10 s), not ENet's 5 s
+          // minimum, so a short drop on a VPN or mobile data doesn't end the stream (as in Vibepollo)
+          enet_peer_timeout(event.peer, ENET_PEER_TIMEOUT_LIMIT, 10000, 10000);
           break;
         case ENET_EVENT_TYPE_DISCONNECT:
           BOOST_LOG(info) << "CLIENT DISCONNECTED"sv;
@@ -1992,6 +1996,10 @@ namespace stream {
   namespace session {
     std::atomic_uint running_sessions;
 
+    unsigned running_count() {
+      return running_sessions.load();
+    }
+
     state_e state(session_t &session) {
       return session.state.load(std::memory_order_relaxed);
     }
@@ -2181,6 +2189,13 @@ namespace stream {
       if (++running_sessions == 1) {
         platf::streaming_will_start();
         proc::proc.resume();
+
+        // [fork] NVIDIA's frame cap and V-Sync off at this stream's rate, which a resume may change;
+        // not for Remote Input, where whoever plays is at the PC. They stay between streams, until
+        // the app quits (proc_t::terminate()).
+        if (!session.config.monitor.input_only) {
+          fork_tweaks::nv_stream::apply(proc::proc.get_running_app_uuid(), (uint32_t) session.config.monitor.encodingFramerate);
+        }
       }
 
       if (!session.do_cmds.empty()) {
@@ -2203,6 +2218,11 @@ namespace stream {
       }
 
       return 0;
+    }
+
+    // [fork] fork/adaptive_bitrate.h
+    std::shared_ptr<fork_tweaks::adaptive_bitrate::live_t> fork_bitrate(session_t &session) {
+      return session.config.monitor.fork_bitrate;
     }
 
     std::shared_ptr<session_t> alloc(config_t &config, rtsp_stream::launch_session_t &launch_session) {

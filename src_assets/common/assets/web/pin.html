@@ -260,7 +260,9 @@
       file_dwnload     = _operation << 3,  // Allow download files from host
       server_cmd       = _operation << 4,  // Allow execute server cmd
       host_update      = _operation << 5,  // [fork] Allow updating Apollo
-      _all_opeiations  = clipboard_set | clipboard_read | file_upload | file_dwnload | server_cmd | host_update,
+      client_drive     = _operation << 6,  // [fork] Allow mounting the client's disk as a network drive
+      host_sleep       = _operation << 7,  // [fork] Allow putting this PC to sleep
+      _all_opeiations  = clipboard_set | clipboard_read | file_upload | file_dwnload | server_cmd | host_update | client_drive | host_sleep,
 
       _action          = _operation << 8,  // Action permission group
       list             = _action << 0,     // Allow list apps
@@ -291,7 +293,9 @@
     file_dwnload: 0x00080000,
     server_cmd: 0x00100000,
     host_update: 0x00200000,  // [fork]
-    _all_operations: 0x003F0000,
+    client_drive: 0x00400000,  // [fork]
+    host_sleep: 0x00800000,  // [fork]
+    _all_operations: 0x00FF0000,
 
     // Action permission group
     list: 0x01000000,
@@ -303,7 +307,7 @@
     // Special permissions
     _default: 0x03000000,
     _no: 0x00000000,
-    _all: 0x073F1F00
+    _all: 0x07FF1F00
   };
 
   const permissionGroups = [
@@ -333,6 +337,12 @@
         suppressed_by: []
       }, {
         name: 'host_update',  // [fork]
+        suppressed_by: []
+      }, {
+        name: 'client_drive',  // [fork]
+        suppressed_by: []
+      }, {
+        name: 'host_sleep',  // [fork]
         suppressed_by: []
       }
     ] },
