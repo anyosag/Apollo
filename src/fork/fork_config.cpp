@@ -48,5 +48,6 @@ namespace fork_tweaks {
     bool_option(vars, "fork_trackpad_mac", trackpad_mac);
     bool_option(vars, "fork_auto_update", auto_update);
     bool_option(vars, "fork_mac_drive", mac_network_drive);
+    bool_option(vars, "fork_host_sleep", client_sleep);
   }
 }  // namespace fork_tweaks

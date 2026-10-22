@@ -61,9 +61,11 @@ namespace crypto {
     server_cmd       = _operation << 4,  // Allow execute server cmd
     host_update      = _operation << 5,  // [fork] Allow updating Apollo (src/fork/updater.h)
     client_drive     = _operation << 6,  // [fork] Allow mounting the client's disk as a network drive (src/fork/mac_drive.h)
-    _all_opeiations  = clipboard_set | clipboard_read | file_upload | file_dwnload | server_cmd | host_update | client_drive,
+    host_sleep       = _operation << 7,  // [fork] Allow putting this PC to sleep (src/fork/host_sleep.h)
+    _all_opeiations  = clipboard_set | clipboard_read | file_upload | file_dwnload | server_cmd | host_update | client_drive | host_sleep,
     _all_before_host_update = 0x071F1F00,  // [fork] _all before host_update; clients with it get host_update too
     _all_before_client_drive = 0x073F1F00,  // [fork] _all before client_drive; clients with it get client_drive too
+    _all_before_host_sleep = 0x077F1F00,  // [fork] _all before host_sleep; clients with it get host_sleep too
 
     _action          = _operation << 8,  // Action permission group
     list             = _action << 0,     // Allow list apps

@@ -615,6 +615,9 @@ namespace stream {
           break;
         case ENET_EVENT_TYPE_CONNECT:
           BOOST_LOG(info) << "CLIENT CONNECTED"sv;
+          // [fork] Wait as long for a quiet client as Moonlight waits for us (10 s), not ENet's 5 s
+          // minimum, so a short drop on a VPN or mobile data doesn't end the stream (as in Vibepollo)
+          enet_peer_timeout(event.peer, ENET_PEER_TIMEOUT_LIMIT, 10000, 10000);
           break;
         case ENET_EVENT_TYPE_DISCONNECT:
           BOOST_LOG(info) << "CLIENT DISCONNECTED"sv;
