@@ -228,6 +228,16 @@ namespace fork_tweaks::nv_stream {
         return true;
       }
 
+      /// The profile's own value goes
+      bool remove(NvDRSProfileHandle profile, uint32_t id) {
+        auto status = delete_setting ? delete_setting(session, profile, id) : NVAPI_NOT_SUPPORTED;
+        if (status != NVAPI_OK && status != NVAPI_SETTING_NOT_FOUND) {
+          BOOST_LOG(warning) << "fork: NVIDIA: couldn't remove "sv << name(id) << " from the profile: "sv << nvapi_error(status);
+          return false;
+        }
+        return true;
+      }
+
       /// Back to the driver's default: the profile's predefined value, or none
       bool clear(NvDRSProfileHandle profile, uint32_t id) {
         auto status = restore_default ? restore_default(session, profile, id) : NVAPI_NOT_SUPPORTED;
@@ -392,10 +402,17 @@ namespace fork_tweaks::nv_stream {
         }
 
         for (const auto &action : u.actions) {
-          auto before = std::find_if(journal.begin(), journal.end(), [&](const policy::entry_t &e) {
-            return e.id == action.id;
-          });
           bool ok = action.kind == policy::action_t::kind_e::clear ? drs.clear(profile, action.id) : drs.write(profile, action.id, action.value);
+          if (ok && action.kind == policy::action_t::kind_e::clear) {
+            // If the profile still has our value as its own, the default didn't come back: it goes
+            auto now = drs.read(profile, kind, action.id);
+            bool still_ours = now && now->own && std::any_of(journal.begin(), journal.end(), [&](const policy::entry_t &e) {
+              return e.id == action.id && e.ours == now->value;
+            });
+            if (still_ours) {
+              ok = drs.remove(profile, action.id);
+            }
+          }
           if (ok) {
             if (action.kind == policy::action_t::kind_e::write) {
               BOOST_LOG(info) << "fork: NVIDIA: "sv << name(action.id) << ' ' << value_text(action.id, action.value) << " while streaming"sv;
@@ -404,9 +421,16 @@ namespace fork_tweaks::nv_stream {
             } else {
               BOOST_LOG(info) << "fork: NVIDIA: "sv << name(action.id) << " back to the driver's default"sv;
             }
-          } else if (action.kind != policy::action_t::kind_e::write && before != journal.end()) {
+          } else if (action.kind == policy::action_t::kind_e::write) {
+            // The profile keeps what it had, and the journal what it knew of it
+            u.entries = policy::write_failed(std::move(u.entries), journal, action.id);
+          } else {
             // Not put back, so still to be put back
-            u.entries.push_back(*before);
+            for (const auto &entry : journal) {
+              if (entry.id == action.id) {
+                u.entries.push_back(entry);
+              }
+            }
           }
         }
 

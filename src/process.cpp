@@ -547,9 +547,10 @@ namespace proc {
   void proc_t::configure_launch_display(const rtsp_stream::launch_session_t &session) {
     // [fork] display_device::configure_display(), but the virtual display keeps running at a multiple
     // of the stream's rate, which the automatic refresh rate would set it back to. A rate the user
-    // set (a manual one, or a remapping) stays theirs.
+    // set (a manual one, or a remapping) stays theirs, and so does any rate while display_device
+    // doesn't list the virtual display, as it would configure the primary display instead.
     auto configure_display = [&](const config::video_t &video_config) {
-      if (!virtual_display || !_vdisplay_refresh_mhz || session.fps <= 0) {
+      if (!virtual_display || !_vdisplay_refresh_mhz || session.fps <= 0 || config::video.output_name.empty()) {
         display_device::configure_display(video_config, session);
         return;
       }
@@ -741,6 +742,17 @@ namespace proc {
     int refresh_mhz = 0;
     bool known = VDISPLAY::getDisplayMode(displayW.c_str(), width, height, refresh_mhz);
 
+    // [fork] A display that fell back to a slower multiple of the stream's rate keeps it, rather than
+    // being asked for the faster one, and re-created when it won't, at every resume
+    if (known && (uint32_t) width == want.width && (uint32_t) height == want.height) {
+      for (auto rate : vdisplay_mode::slower_rates(want, _vdisplay_stream_mhz)) {
+        if (rate == _vdisplay_refresh_mhz && vdisplay_mode::runs({want.width, want.height, rate}, width, height, refresh_mhz)) {
+          want.refresh_mhz = rate;
+          break;
+        }
+      }
+    }
+
     bool hdr_automatic = config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic;
     bool hdr_differs = hdr_automatic && VDISPLAY::getDisplayHDRByName(displayW.c_str()) != session.enable_hdr;
 
@@ -798,6 +810,19 @@ namespace proc {
             break;
           }
           BOOST_LOG(info) << "vdisplay: "sv << display_name << " runs "sv << width << 'x' << height << 'x' << refresh_mhz << " mHz after the change"sv;
+        }
+      }
+      // [fork] A slower multiple of the stream's rate before re-creating the display
+      for (auto rate : vdisplay_mode::slower_rates(want, _vdisplay_stream_mhz)) {
+        vdisplay_mode::display_mode_t slower {want.width, want.height, rate};
+        if (took || !luzvda_desc::offers(_vdisplay_desc, slower)) {
+          continue;
+        }
+        VDISPLAY::changeDisplaySettings(displayW.c_str(), slower.width, slower.height, slower.refresh_mhz);
+        took = VDISPLAY::getDisplayMode(displayW.c_str(), width, height, refresh_mhz) && vdisplay_mode::runs(slower, width, height, refresh_mhz);
+        if (took) {
+          BOOST_LOG(info) << "vdisplay: "sv << display_name << " runs "sv << rate << " mHz, slower than asked"sv;
+          want.refresh_mhz = rate;
         }
       }
       if (took) {

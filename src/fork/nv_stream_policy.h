@@ -286,12 +286,33 @@ namespace nv_stream_policy {
 
   /**
    * @brief The journal while the actions are being saved: the entries before and after together,
-   * so a crash at any point still knows every value to put back.
+   * so a crash, or a save that fails, still knows every value to put back. A setting the update
+   * gives another value of ours is there twice, with each value: whichever the profile ends up
+   * with is put back, and the other is left as someone else's.
    */
   inline std::vector<entry_t> while_saving(const std::vector<entry_t> &before, const update_t &u) {
     std::vector<entry_t> entries = u.entries;
     for (const auto &entry : before) {
-      if (!find(entries, entry.id)) {
+      bool kept = std::any_of(entries.begin(), entries.end(), [&](const entry_t &e) {
+        return e.id == entry.id && e.ours == entry.ours;
+      });
+      if (!kept) {
+        entries.push_back(entry);
+      }
+    }
+    return entries;
+  }
+
+  /**
+   * @brief The journal after an update whose write of `id` failed: the profile still has what it
+   * had, so that setting's entry is the one from before the update, or none.
+   */
+  inline std::vector<entry_t> write_failed(std::vector<entry_t> entries, const std::vector<entry_t> &before, uint32_t id) {
+    std::erase_if(entries, [id](const entry_t &e) {
+      return e.id == id;
+    });
+    for (const auto &entry : before) {
+      if (entry.id == id) {
         entries.push_back(entry);
       }
     }

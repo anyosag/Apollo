@@ -2132,8 +2132,11 @@ namespace stream {
         platf::streaming_will_stop();
 
         // [fork] NVIDIA's frame cap and V-Sync off only while someone streams, so a game played at
-        // the PC between streams isn't capped
-        fork_tweaks::nv_stream::restore();
+        // the PC between streams isn't capped. A game on the virtual display stays capped until the
+        // display goes: at 4x the stream's rate it would otherwise render that fast for nobody.
+        if (!proc::proc.virtual_display) {
+          fork_tweaks::nv_stream::restore();
+        }
       }
 
       BOOST_LOG(debug) << "Session ended"sv;
@@ -2187,8 +2190,11 @@ namespace stream {
         platf::streaming_will_start();
         proc::proc.resume();
 
-        // [fork] NVIDIA's frame cap and V-Sync off again after a resume, at this stream's rate
-        fork_tweaks::nv_stream::apply(proc::proc.get_running_app_uuid(), (uint32_t) session.config.monitor.encodingFramerate);
+        // [fork] NVIDIA's frame cap and V-Sync off again after a resume, at this stream's rate; not for
+        // Remote Input, where whoever plays is at the PC
+        if (!session.config.monitor.input_only) {
+          fork_tweaks::nv_stream::apply(proc::proc.get_running_app_uuid(), (uint32_t) session.config.monitor.encodingFramerate);
+        }
       }
 
       if (!session.do_cmds.empty()) {

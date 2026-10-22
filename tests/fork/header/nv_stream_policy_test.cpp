@@ -223,6 +223,39 @@ static void test_update_unreadable() {
   CHECK(find(saving, frame_rate_limit_id) && find(saving, vsync_id) && find(saving, smooth_motion_id));
 }
 
+static void test_failed_save() {
+  // Launched at 60 fps, then the first session at 120: if that change isn't saved (or Apollo stops
+  // first), the profile still caps at 60, and the journal must still put that back
+  profile_t p;
+  auto launch = p.update({}, for_stream({}, 60000, 58000, smooth_motion_cap_e::stream));
+  CHECK((launch.entries == std::vector<entry_t> {{frame_rate_limit_id, 60, std::nullopt}, {vsync_id, vsync_force_off, std::nullopt}}));
+
+  profile_t unsaved = p;
+  auto session = nv_stream_policy::update(launch.entries, for_stream({}, 120000, 58000, smooth_motion_cap_e::stream), [&](uint32_t id) {
+    return unsaved.read(id);
+  });
+  auto saving = while_saving(launch.entries, session);
+  CHECK(saving.size() == 3);
+  // Nothing was saved: unsaved still caps at 60, and putting back clears it
+  auto end = unsaved.update(saving, {});
+  CHECK(!unsaved.own.count(frame_rate_limit_id));
+  CHECK(!unsaved.own.count(vsync_id));
+  CHECK(end.entries.empty());
+
+  // Saved after all: the 120 entry clears it, the 60 one is left
+  p.run(session.actions);
+  CHECK(p.own[frame_rate_limit_id] == 120);
+  end = p.update(saving, {});
+  CHECK(!p.own.count(frame_rate_limit_id));
+  CHECK(end.entries.empty());
+
+  // A write that failed: the journal keeps what it knew before
+  auto kept = write_failed(session.entries, launch.entries, frame_rate_limit_id);
+  CHECK((kept == std::vector<entry_t> {{vsync_id, vsync_force_off, std::nullopt}, {frame_rate_limit_id, 60, std::nullopt}}));
+  auto none = write_failed({{smooth_motion_id, 1, std::nullopt}}, {}, smooth_motion_id);
+  CHECK(none.empty());
+}
+
 static void test_journal() {
   journal_t j {profile_e::global, {{frame_rate_limit_id, 120, 141}, {vsync_id, vsync_force_off, std::nullopt}}};
   auto back = from_json(to_json(j));
@@ -262,6 +295,7 @@ int main() {
   test_update();
   test_update_changes();
   test_update_unreadable();
+  test_failed_save();
   test_journal();
   test_refresh_multiplier();
 

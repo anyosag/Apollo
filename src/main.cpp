@@ -485,9 +485,13 @@ int main(int argc, char *argv[]) {
 
 #ifdef _WIN32
   // Restore global NVIDIA control panel settings
-  if (nvprefs_instance.owning_undo_file() && nvprefs_instance.load()) {
-    nvprefs_instance.restore_global_profile();
-    nvprefs_instance.unload();
+  {
+    // [fork] Not while fork/nv_stream.cpp has NVAPI loaded (a late terminate())
+    std::lock_guard nvapi_lock {fork_tweaks::nv_stream::nvapi_mutex()};
+    if (nvprefs_instance.owning_undo_file() && nvprefs_instance.load()) {
+      nvprefs_instance.restore_global_profile();
+      nvprefs_instance.unload();
+    }
   }
 
   // Stop the threaded tray if it was started
