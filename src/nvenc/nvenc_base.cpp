@@ -386,6 +386,15 @@ namespace nvenc {
       return false;
     }
 
+    // [fork] Kept for set_bitrate(), which reconfigures with everything else unchanged
+    fork_reconfigure.init_params = init_params;
+    fork_reconfigure.enc_config = enc_config;
+    fork_reconfigure.init_params.encodeConfig = &fork_reconfigure.enc_config;
+    fork_reconfigure.dynamic_bitrate = get_encoder_cap(NV_ENC_CAPS_SUPPORT_DYN_BITRATE_CHANGE);
+    fork_reconfigure.custom_vbv = get_encoder_cap(NV_ENC_CAPS_SUPPORT_CUSTOM_VBV_BUF_SIZE);
+    fork_reconfigure.vbv_percentage_increase = config.vbv_percentage_increase;
+    fork_reconfigure.framerate = client_config.framerate;
+
     if (async_event_handle) {
       NV_ENC_EVENT_PARAMS event_params = {min_struct_version(NV_ENC_EVENT_PARAMS_VER)};
       event_params.completionEvent = async_event_handle;
@@ -485,6 +494,7 @@ namespace nvenc {
 
     encoder_state = {};
     encoder_params = {};
+    fork_reconfigure = {};  // [fork]
   }
 
   nvenc_encoded_frame nvenc_base::encode_frame(uint64_t frame_index, bool force_idr) {
@@ -569,6 +579,35 @@ namespace nvenc {
     encoder_state.frame_size_logger.collect_and_log(encoded_frame.data.size() / 1000.);
 
     return encoded_frame;
+  }
+
+  // [fork] fork/adaptive_bitrate.h
+  bool nvenc_base::set_bitrate(int bitrate_kbps) {
+    if (!encoder || !fork_reconfigure.dynamic_bitrate || bitrate_kbps <= 0) {
+      return false;
+    }
+
+    // Everything as create_encoder() set it, but the bitrate and the VBV sized for it the same way
+    NV_ENC_CONFIG enc_config = fork_reconfigure.enc_config;
+    enc_config.rcParams.averageBitRate = (uint32_t) bitrate_kbps * 1000;
+    if (fork_reconfigure.custom_vbv) {
+      enc_config.rcParams.vbvBufferSize = fork_tweaks::adaptive_bitrate::vbv_bits(bitrate_kbps, fork_reconfigure.framerate, fork_reconfigure.vbv_percentage_increase);
+    }
+
+    NV_ENC_RECONFIGURE_PARAMS reconfigure_params = {min_struct_version(NV_ENC_RECONFIGURE_PARAMS_VER)};
+    reconfigure_params.reInitEncodeParams = fork_reconfigure.init_params;
+    reconfigure_params.reInitEncodeParams.encodeConfig = &enc_config;
+    reconfigure_params.resetEncoder = 0;
+    reconfigure_params.forceIDR = 0;
+
+    if (nvenc_failed(nvenc->nvEncReconfigureEncoder(encoder, &reconfigure_params))) {
+      BOOST_LOG(error) << "NvEnc: NvEncReconfigureEncoder() for " << bitrate_kbps << " kbps failed: " << last_nvenc_error_string;
+      return false;
+    }
+
+    fork_reconfigure.enc_config = enc_config;
+    BOOST_LOG(debug) << "NvEnc: bitrate changed to " << bitrate_kbps << " kbps, VBV " << enc_config.rcParams.vbvBufferSize << " bits";
+    return true;
   }
 
   bool nvenc_base::invalidate_ref_frames(uint64_t first_frame, uint64_t last_frame) {

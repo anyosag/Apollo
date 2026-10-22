@@ -27,6 +27,7 @@
 #include "display_device.h"
 #include "atomic_file.h"
 #include "file_handler.h"
+#include "fork/adaptive_bitrate.h"  // [fork]
 #include "fork/clipboard_bundle.h"  // [fork]
 #include "fork/clipboard_files.h"  // [fork]
 #include "fork/mac_drive.h"  // [fork]
@@ -1020,6 +1021,7 @@ namespace nvhttp {
       tree.put("root.LuzUpdate", fork_tweaks::updater::supported() ? 1 : 0);  // [fork] /actions/update works
       tree.put("root.LuzClipboardFiles", fork_tweaks::clipboard_files::enabled() ? 1 : 0);  // [fork] file copies through the clipboard
       tree.put("root.LuzMacDrive", fork_tweaks::mac_drive::supported() ? 1 : 0);  // [fork] /actions/drive works
+      tree.put("root.LuzBitrate", fork_tweaks::adaptive_bitrate::supported() ? 1 : 0);  // [fork] /actions/bitrate works
       tree.put("root.VirtualDisplayCapable", true);
       if (!!(named_cert_p->perm & PERM::_all_actions)) {
         tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK);
@@ -1868,6 +1870,23 @@ namespace nvhttp {
     response->write(static_cast<SimpleWeb::StatusCode>(reply.status), reply.body, headers);
   }
 
+  /**
+   * @brief [fork] LuzLunar's bitrate while its stream runs (fork/adaptive_bitrate.h). GET reports
+   * it; POST {"kbps": N} changes it, between a floor and the bitrate the stream launched with. Only
+   * the client's own stream; needs View or Launch.
+   */
+  void forkBitrate(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    auto named_cert_p = get_verified_cert(request);
+    fork_tweaks::adaptive_bitrate::client_t client {named_cert_p->name, named_cert_p->uuid, !!(named_cert_p->perm & PERM::_allow_view)};
+    auto reply = fork_tweaks::adaptive_bitrate::handle(client, request->method, request->content.string());
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    response->write(static_cast<SimpleWeb::StatusCode>(reply.status), reply.body, headers);
+  }
+
   void setup(const std::string &pkey, const std::string &cert) {
     conf_intern.pkey = pkey;
     conf_intern.servercert = cert;
@@ -1972,6 +1991,8 @@ namespace nvhttp {
     https_server.resource["^/actions/update$"]["POST"] = forkUpdate;  // [fork]
     https_server.resource["^/actions/drive$"]["GET"] = forkDrive;  // [fork]
     https_server.resource["^/actions/drive$"]["POST"] = forkDrive;  // [fork]
+    https_server.resource["^/actions/bitrate$"]["GET"] = forkBitrate;  // [fork]
+    https_server.resource["^/actions/bitrate$"]["POST"] = forkBitrate;  // [fork]
 
     https_server.config.reuse_address = true;
     https_server.config.address = net::af_to_any_address_string(address_family);

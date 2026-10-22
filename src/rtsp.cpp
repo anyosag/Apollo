@@ -1070,10 +1070,15 @@ namespace rtsp_stream {
 
       BOOST_LOG(info) << "Host Streaming bitrate is [" << configuredBitrateKbps << "kbps]";
 
+      // [fork] LuzLunar can change the bitrate while the stream runs, up to this (fork/adaptive_bitrate.h)
+      config.monitor.fork_bitrate = std::make_shared<fork_tweaks::adaptive_bitrate::live_t>();
+      config.monitor.fork_bitrate->launch.client_kbps = configuredBitrateKbps;
+
       // Hack: Restore bitrate for warp mode
       size_t warp_factor = std::round((float)config.monitor.framerate * 1000 / session.fps);
       if (config::video.limit_framerate && warp_factor >= 2) {
         configuredBitrateKbps *= warp_factor;
+        config.monitor.fork_bitrate->launch.warp_factor = (std::int64_t) warp_factor;  // [fork]
         BOOST_LOG(info) << "Warp factor [" << warp_factor << "] engaged";
       }
 
@@ -1143,6 +1148,12 @@ namespace rtsp_stream {
 
       BOOST_LOG(debug) << "Final adjusted video encoding bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
       config.monitor.bitrate = configuredBitrateKbps;
+    }
+
+    // [fork] The rest of what a bitrate change converts with, as above
+    if (config.monitor.fork_bitrate) {
+      config.monitor.fork_bitrate->launch.fec_percentage = config::stream.fec_percentage;
+      config.monitor.fork_bitrate->launch.audio_kbps = fork_tweaks::adaptive_bitrate::audio_kbps(config.audio.flags[audio::config_t::HIGH_QUALITY], config.audio.channels);
     }
 
     if (config.monitor.videoFormat == 1 && video::active_hevc_mode == 1) {
