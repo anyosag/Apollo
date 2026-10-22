@@ -47,5 +47,6 @@ namespace fork_tweaks {
     bool_option(vars, "fork_touchpad_passthrough", touchpad_passthrough);
     bool_option(vars, "fork_trackpad_mac", trackpad_mac);
     bool_option(vars, "fork_auto_update", auto_update);
+    bool_option(vars, "fork_mac_drive", mac_network_drive);
   }
 }  // namespace fork_tweaks

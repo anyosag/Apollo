@@ -28,6 +28,8 @@ install(TARGETS sunshinesvc RUNTIME DESTINATION "tools" COMPONENT application)
 install(TARGETS apollo-updater RUNTIME DESTINATION "tools" COMPONENT application)
 # [fork] Opens the touch keyboard for stock Moonlight for iOS (src/fork/touch_keyboard.cpp)
 install(TARGETS apollo-touch-keyboard RUNTIME DESTINATION "tools" COMPONENT application)
+# [fork] Maps LuzLunar's Mac as a network drive (src/fork/mac_drive.cpp)
+install(TARGETS apollo-mac-drive RUNTIME DESTINATION "tools" COMPONENT application)
 
 # Drivers
 # [fork] LuzVDA (anyosag/LuzVDA): the scripts and certificate from the source tree, the signed driver
