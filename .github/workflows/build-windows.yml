@@ -34,6 +34,7 @@ jobs:
       attestations: write  # store it
     outputs:
       version: ${{ steps.version.outputs.version }}
+      channel: ${{ steps.version.outputs.channel }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
@@ -115,26 +116,29 @@ jobs:
 
       # Version is the latest upstream release plus the number of commits since it,
       # e.g. 0.4.8.26, so Apollo's update check compares correctly against upstream releases.
-      # The run number orders builds for over-the-air updates (src/fork/updater.cpp); only a push to
-      # master is a master build, which updates may replace by themselves and the publish job releases.
+      # The run number orders builds for over-the-air updates (src/fork/updater.cpp). A master build,
+      # which updates may replace by themselves and the publish job releases, is a push to master or a
+      # run started by hand on master (Run workflow, for a push GitHub didn't act on). Sync upstream's
+      # builds never are: a called workflow sees its caller's name in github.workflow.
       - name: Determine version
         id: version
         shell: bash
         env:
           FORK_BUILD_RUN: ${{ github.run_number }}
-          IS_MASTER_PUSH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          IS_MASTER_BUILD: ${{ github.ref == 'refs/heads/master' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.workflow == 'Build Windows')) }}
         run: |
           git fetch --quiet --tags https://github.com/ClassicOldSong/Apollo.git
           tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*')
           version="${tag#v}.$(git rev-list --count "$tag..HEAD")"
           channel=branch
-          if [ "$IS_MASTER_PUSH" = true ]; then channel=master; fi
+          if [ "$IS_MASTER_BUILD" = true ]; then channel=master; fi
           echo "Building version $version, run $FORK_BUILD_RUN ($channel)"
           echo "BUILD_VERSION=$version" >> "$GITHUB_ENV"
           echo "COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "FORK_BUILD_RUN=$FORK_BUILD_RUN" >> "$GITHUB_ENV"
           echo "FORK_BUILD_CHANNEL=$channel" >> "$GITHUB_ENV"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
       # The LuzVDA virtual display driver (anyosag/LuzVDA). Its CI builds it unsigned; its owner signs it on
       # their own PC and publishes the signed zip as a release. The source tree has only install.bat,
@@ -427,7 +431,7 @@ jobs:
   publish:
     name: Publish update
     needs: build_windows
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: needs.build_windows.outputs.channel == 'master' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     environment: release
     permissions:
