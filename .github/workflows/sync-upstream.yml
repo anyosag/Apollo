@@ -125,8 +125,10 @@ jobs:
     name: Build installer
     needs: sync
     if: needs.sync.outputs.updated == 'true' || inputs.build
+    # A called workflow's jobs get at most what this job grants, and GitHub won't start the run if
+    # any of them asks for more, even one that would be skipped
     permissions:
-      contents: read
+      contents: write  # only build-windows.yml's publish job asks for it, and it runs on pushes to master alone
       id-token: write  # sign the build provenance
       attestations: write  # store it
     uses: ./.github/workflows/build-windows.yml
