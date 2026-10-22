@@ -35,6 +35,15 @@ namespace fork_tweaks::vdisplay_extend {
   void restore(const snapshot_t &before, const std::string &virtual_id);
 
   /**
+   * @brief Switches the virtual display on again next to the displays that are on, switching none
+   * of them off, for the recovery monitor (vdisplay_recovery.h) when Windows switched it off
+   * mid-stream (Windows only).
+   * @param virtual_id The virtual display's device id.
+   * @return Whether it's on, or Windows took the change.
+   */
+  bool switch_on(const std::string &virtual_id);
+
+  /**
    * @brief The display configuration for an extended desktop: the configured one, except that
    * `ensure_only_display` and `ensure_primary` become `ensure_active`, so the other displays stay
    * on and the primary display stays where it is.

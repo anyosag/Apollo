@@ -608,9 +608,24 @@ bool setRenderAdapter(const std::string& adapterName) {
 	return setRenderAdapterAuto();
 }
 
-// [fork] The GDI name of the display at this adapter and target, once Windows has given it a path.
-// Target ids are only unique per adapter; the id alone is the fallback in case the path names
-// another adapter than the driver reported.
+// [fork] The active path to the display at this adapter and target. Target ids are only unique per
+// adapter; the id alone is the fallback in case the path names another adapter than the driver
+// reported.
+static const DISPLAYCONFIG_PATH_INFO* pathFor(const std::vector<DISPLAYCONFIG_PATH_INFO>& paths, const LUID& adapter, uint32_t targetId) {
+	for (const auto& path : paths) {
+		if (path.targetInfo.id == targetId && sameLuid(path.targetInfo.adapterId, adapter)) {
+			return &path;
+		}
+	}
+	for (const auto& path : paths) {
+		if (path.targetInfo.id == targetId) {
+			return &path;
+		}
+	}
+	return nullptr;
+}
+
+// [fork] The GDI name of the display at this adapter and target, once Windows has given it a path
 static bool displayNameFor(const LUID& adapter, uint32_t targetId, std::wstring& name) {
 	std::vector<DISPLAYCONFIG_PATH_INFO> paths;
 	std::vector<DISPLAYCONFIG_MODE_INFO> modes;
@@ -618,22 +633,7 @@ static bool displayNameFor(const LUID& adapter, uint32_t targetId, std::wstring&
 		return false;
 	}
 
-	const DISPLAYCONFIG_PATH_INFO* found = nullptr;
-	for (const auto& path : paths) {
-		if (path.targetInfo.id == targetId && sameLuid(path.targetInfo.adapterId, adapter)) {
-			found = &path;
-			break;
-		}
-	}
-	if (!found) {
-		for (const auto& path : paths) {
-			if (path.targetInfo.id == targetId) {
-				found = &path;
-				break;
-			}
-		}
-	}
-
+	const auto* found = pathFor(paths, adapter, targetId);
 	return found && sourceNameOf(*found, name);
 }
 
@@ -779,6 +779,41 @@ std::wstring getVirtualDisplayName(const GUID& guid) {
 		return std::wstring();
 	}
 	return name;
+}
+
+// [fork]
+PRESENCE getVirtualDisplayPresence(const GUID& guid, std::wstring& name) {
+	name.clear();
+	if (LUZVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
+		return PRESENCE::UNKNOWN;
+	}
+
+	LUZVDA_LIST list;
+	if (LUZVDA::listDisplays(LUZVDA_DRIVER_HANDLE, list)) {
+		return PRESENCE::UNKNOWN;
+	}
+	auto want = LUZVDA::toProtocol(guid);
+	const LUZVDA_LIST_ENTRY* listed = nullptr;
+	for (uint32_t i = 0; i < list.count; ++i) {
+		if (std::memcmp(list.displays[i].monitor_guid.bytes, want.bytes, sizeof(want.bytes)) == 0) {
+			listed = &list.displays[i];
+			break;
+		}
+	}
+	if (!listed) {
+		return PRESENCE::MISSING;
+	}
+
+	std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+	std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+	if (!queryActiveConfig(paths, modes)) {
+		return PRESENCE::UNKNOWN;
+	}
+	const auto* found = pathFor(paths, LUZVDA::fromProtocol(listed->adapter), listed->target_id);
+	if (!found) {
+		return PRESENCE::INACTIVE;
+	}
+	return sourceNameOf(*found, name) ? PRESENCE::ACTIVE : PRESENCE::UNKNOWN;
 }
 
 int removeAllVirtualDisplays() {

@@ -43,6 +43,8 @@
 
   // [fork] The LuzVDA driver's requests
   #include "fork/luzvda_desc.h"
+  // [fork] Bringing the virtual display back mid-stream
+  #include "fork/vdisplay_recovery.h"
   // [fork] The Virtual Display app's extended desktop
   #include "fork/fork_config.h"
   #include "fork/vdisplay_extend.h"
@@ -67,6 +69,22 @@ namespace proc {
   std::string input_only_app_id_str;
   int terminate_app_id = -1;
   std::string terminate_app_id_str;
+
+  namespace {
+    // [fork] display_name is also read by capture and renamed by the recovery monitor
+    std::mutex &display_name_mutex() {
+      static std::mutex mutex;
+      return mutex;
+    }
+
+#ifdef _WIN32
+    // [fork] Keeps a resume's display changes and the recovery monitor's apart (fork/vdisplay_recovery.h)
+    std::recursive_mutex &vdisplay_mutex() {
+      static std::recursive_mutex mutex;
+      return mutex;
+    }
+#endif
+  }  // namespace
 
 #ifdef _WIN32
   VDISPLAY::DRIVER_STATUS vDisplayDriverStatus = VDISPLAY::DRIVER_STATUS::UNKNOWN;
@@ -350,9 +368,9 @@ namespace proc {
       if (wait_for_display_settings()) {
         // The display configuration above sets HDR to the client's request itself when dd_hdr_option
         // is auto; Apollo's switches below don't count that one
-        auto displayW = platf::from_utf8(display_name);
+        auto displayW = platf::from_utf8(_vdisplay_name);
         bool configured_hdr = VDISPLAY::getDisplayHDRByName(displayW.c_str());
-        apply_virtual_display_hdr(display_name, launch_session->enable_hdr, true);
+        apply_virtual_display_hdr(_vdisplay_name, launch_session->enable_hdr, true);
 
         stats = VDISPLAY::takeModeStats();
         BOOST_LOG(info) << "vdisplay: HDR set "sv << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - launch_start).count()
@@ -361,6 +379,9 @@ namespace proc {
       } else {
         BOOST_LOG(warning) << "vdisplay: Windows doesn't accept display changes now (a locked session?), HDR left as it is"sv;
       }
+
+      // [fork] Brings the display back if Windows switches it off mid-stream
+      start_vdisplay_recovery();
     }
 
 #else
@@ -612,15 +633,21 @@ namespace proc {
 
     // Set virtual_display to true when everything went fine
     this->virtual_display = true;
-    this->display_name = platf::to_utf8(vdisplayName);
+    _vdisplay_name = platf::to_utf8(vdisplayName);
+    _vdisplay_mode = mode;
+    {
+      std::lock_guard lock {display_name_mutex()};
+      this->display_name = _vdisplay_name;
+    }
 
     // When using virtual display, we don't care which display user configured to use.
     // So we always set output_name to the newly created virtual display as a workaround for
     // empty name when probing graphics cards.
-    config::video.output_name = display_device::map_display_name(this->display_name);
+    _vdisplay_id = display_device::map_display_name(_vdisplay_name);
+    config::video.output_name = _vdisplay_id;
     if (config::video.output_name.empty()) {
       // display_device then configures whichever display is primary
-      BOOST_LOG(warning) << "vdisplay: display_device doesn't list "sv << this->display_name << " yet"sv;
+      BOOST_LOG(warning) << "vdisplay: display_device doesn't list "sv << _vdisplay_name << " yet"sv;
     }
     return true;
   }
@@ -668,7 +695,10 @@ namespace proc {
   }
 
   proc_t::vdisplay_change_e proc_t::reconfigure_virtual_display(const rtsp_stream::launch_session_t &session) {
-    if (!virtual_display || display_name.empty() || !_launch_session || vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
+    // [fork] Not while the recovery monitor brings the display back
+    std::lock_guard vdisplay_lock {vdisplay_mutex()};
+
+    if (!virtual_display || _vdisplay_name.empty() || !_launch_session || vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
       return vdisplay_change_e::unchanged;
     }
 
@@ -678,11 +708,18 @@ namespace proc {
     int scale_factor = vdisplay_mode::effective_scale(session.scale_factor, _app.scale_factor);
     auto want = vdisplay_mode::for_client(session.width, session.height, session.fps, scale_factor, config::video.double_refreshrate);
 
-    auto displayW = platf::from_utf8(display_name);
+    // The display's name now, from the driver: an old one may belong to a monitor of the PC by now,
+    // and a display Windows switched off has none
+    auto current = platf::to_utf8(VDISPLAY::getVirtualDisplayName(_launch_session->display_guid));
+    if (!current.empty() && current != _vdisplay_name) {
+      virtual_display_back(current, false);
+    }
+
+    auto displayW = platf::from_utf8(_vdisplay_name);
     int width = 0;
     int height = 0;
     int refresh_mhz = 0;
-    bool known = VDISPLAY::getDisplayMode(displayW.c_str(), width, height, refresh_mhz);
+    bool known = !current.empty() && VDISPLAY::getDisplayMode(displayW.c_str(), width, height, refresh_mhz);
 
     bool hdr_automatic = config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic;
     bool hdr_differs = hdr_automatic && VDISPLAY::getDisplayHDRByName(displayW.c_str()) != session.enable_hdr;
@@ -695,39 +732,22 @@ namespace proc {
     bool same_screen = luzvda_desc::same_screen(_vdisplay_desc, desc);
 
     auto replug = [&](const char *why) {
-      BOOST_LOG(info) << "vdisplay: "sv << why << ", re-creating "sv << display_name;
-
-      VDISPLAY::removeVirtualDisplay(_launch_session->display_guid);
-      virtual_display = false;
-      display_name.clear();
-      mode_changed_display.clear();
-
-      if (!setup_virtual_display(want, session.client_screen, _launch_session->display_guid, true)) {
-        return vdisplay_change_e::failed;
-      }
-
-      // A new display brings Windows' own arrangement back, the PC's monitors included, so the
-      // display configuration a launch applies (e.g. this display only) is applied again
-      _launch_session->width = want.width;
-      _launch_session->height = want.height;
-      _launch_session->fps = session.fps;
-      _launch_session->enable_hdr = session.enable_hdr;
-      configure_launch_display(*_launch_session);
-      display_device::reset_persistence();
-      return vdisplay_change_e::replugged;
+      return replug_virtual_display(want, session, why);
     };
 
     auto result = vdisplay_change_e::unchanged;
     if (!same_screen) {
       result = replug("the client streams to another screen");
+    } else if (current.empty()) {
+      result = replug("Windows switched the display off");
     } else if (!known || !vdisplay_mode::runs(want, width, height, refresh_mhz)) {
       BOOST_LOG(info) << "vdisplay: resume asks for "sv << want.width << 'x' << want.height << 'x' << want.refresh_mhz
-                      << " mHz, "sv << display_name << " runs "sv << width << 'x' << height << 'x' << refresh_mhz << " mHz"sv;
+                      << " mHz, "sv << _vdisplay_name << " runs "sv << width << 'x' << height << 'x' << refresh_mhz << " mHz"sv;
 
       // A display takes modes it didn't arrive with once the driver offers them (seen on Windows 11
       // build 26200), so a new one doesn't need the display to arrive again
       if (!luzvda_desc::offers(_vdisplay_desc, want) && VDISPLAY::updateVirtualDisplayModes(luzvda_desc::update(desc))) {
-        BOOST_LOG(info) << "vdisplay: gave "sv << display_name << ' ' << desc.mode_count << " modes for the new one"sv;
+        BOOST_LOG(info) << "vdisplay: gave "sv << _vdisplay_name << ' ' << desc.mode_count << " modes for the new one"sv;
         _vdisplay_desc = desc;
       }
       // Windows may take a moment to offer modes the display just got, so the change is tried again
@@ -738,9 +758,10 @@ namespace proc {
           VDISPLAY::changeDisplaySettings(displayW.c_str(), want.width, want.height, want.refresh_mhz);
           took = VDISPLAY::getDisplayMode(displayW.c_str(), width, height, refresh_mhz) && vdisplay_mode::runs(want, width, height, refresh_mhz);
           if (took) {
+            _vdisplay_mode = want;
             break;
           }
-          BOOST_LOG(info) << "vdisplay: "sv << display_name << " runs "sv << width << 'x' << height << 'x' << refresh_mhz << " mHz after the change"sv;
+          BOOST_LOG(info) << "vdisplay: "sv << _vdisplay_name << " runs "sv << width << 'x' << height << 'x' << refresh_mhz << " mHz after the change"sv;
         }
       }
       result = took ? vdisplay_change_e::mode_changed : replug("the display didn't take that mode");
@@ -753,7 +774,7 @@ namespace proc {
       // test's resumes), so HDR is set again only when it should change or the display is new
       if (result == vdisplay_change_e::replugged || hdr_differs) {
         if (wait_for_display_settings()) {
-          apply_virtual_display_hdr(display_name, session.enable_hdr, false);
+          apply_virtual_display_hdr(_vdisplay_name, session.enable_hdr, false);
         } else {
           BOOST_LOG(warning) << "vdisplay: Windows didn't accept display changes in time, HDR left as it is"sv;
         }
@@ -764,6 +785,11 @@ namespace proc {
       _launch_session->fps = session.fps;
       _launch_session->enable_hdr = session.enable_hdr;
       _launch_session->client_screen = session.client_screen;
+
+      // [fork] The recovery monitor judges the display afresh once it has settled
+      if (_vdisplay_recovery) {
+        _vdisplay_recovery->settle();
+      }
     }
 
     auto stats = VDISPLAY::takeModeStats();
@@ -772,7 +798,155 @@ namespace proc {
 
     return result;
   }
+
+  proc_t::vdisplay_change_e proc_t::replug_virtual_display(const vdisplay_mode::display_mode_t &want, const rtsp_stream::launch_session_t &session, const char *why) {
+    BOOST_LOG(info) << "vdisplay: "sv << why << ", re-creating "sv << _vdisplay_name;
+
+    VDISPLAY::removeVirtualDisplay(_launch_session->display_guid);
+    virtual_display = false;
+    _vdisplay_name.clear();
+    {
+      std::lock_guard lock {display_name_mutex()};
+      display_name.clear();
+    }
+    mode_changed_display.clear();
+
+    if (!setup_virtual_display(want, session.client_screen, _launch_session->display_guid, true)) {
+      return vdisplay_change_e::failed;
+    }
+
+    // A new display brings Windows' own arrangement back, the PC's monitors included, so the
+    // display configuration a launch applies (e.g. this display only) is applied again
+    _launch_session->width = want.width;
+    _launch_session->height = want.height;
+    _launch_session->fps = session.fps;
+    _launch_session->enable_hdr = session.enable_hdr;
+    configure_launch_display(*_launch_session);
+    display_device::reset_persistence();
+    return vdisplay_change_e::replugged;
+  }
+
+  bool proc_t::display_configured() const {
+    return _launch_session && std::holds_alternative<display_device::SingleDisplayConfiguration>(display_device::parse_configuration(config::video, *_launch_session));
+  }
+
+  std::unique_lock<std::recursive_mutex> proc_t::try_lock_virtual_display() {
+    return std::unique_lock {vdisplay_mutex(), std::try_to_lock};
+  }
+
+  std::string proc_t::virtual_display_name() const {
+    return _vdisplay_name;
+  }
+
+  bool proc_t::reactivate_virtual_display() {
+    if (!virtual_display || !_launch_session) {
+      return false;
+    }
+    if (_vdisplay_id.empty()) {
+      BOOST_LOG(warning) << "vdisplay: display_device has no id for the virtual display, so it can't be switched on again"sv;
+      return false;
+    }
+
+    // The launch's display configuration again (e.g. this display only); without one, or for the
+    // extended desktop, the display goes next to whatever is on, and nothing is switched off
+    if (extends_desktop() || !display_configured()) {
+      return fork_tweaks::vdisplay_extend::switch_on(_vdisplay_id);
+    }
+    BOOST_LOG(info) << "vdisplay: applying the launch's display configuration again"sv;
+    configure_launch_display(*_launch_session);
+    display_device::reset_persistence();
+    return true;
+  }
+
+  bool proc_t::recreate_virtual_display() {
+    if (!_launch_session || vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
+      return false;
+    }
+    VDISPLAY::takeModeStats();
+    return replug_virtual_display(_vdisplay_mode, *_launch_session, "the virtual display didn't come back") == vdisplay_change_e::replugged;
+  }
+
+  void proc_t::virtual_display_back(const std::string &name, bool was_off) {
+    if (name != _vdisplay_name) {
+      BOOST_LOG(info) << "vdisplay: "sv << _vdisplay_name << " is now "sv << name;
+      {
+        // Capture follows it unless another display was picked with the shortcut
+        std::lock_guard lock {display_name_mutex()};
+        if (display_name == _vdisplay_name) {
+          display_name = name;
+        }
+      }
+      _vdisplay_name = name;
+    }
+    if (_vdisplay_id.empty()) {
+      _vdisplay_id = display_device::map_display_name(name);
+      if (!_vdisplay_id.empty()) {
+        config::video.output_name = _vdisplay_id;
+      }
+    }
+    if (!was_off || !_launch_session) {
+      return;
+    }
+
+    auto nameW = platf::from_utf8(name);
+    // A display configuration sets the mode it's configured for; without one, the display runs the
+    // mode it was set up with
+    if (!display_configured()) {
+      int was_width = 0;
+      int was_height = 0;
+      int was_refresh_mhz = 0;
+      if (!VDISPLAY::getDisplayMode(nameW.c_str(), was_width, was_height, was_refresh_mhz) || !vdisplay_mode::runs(_vdisplay_mode, was_width, was_height, was_refresh_mhz)) {
+        BOOST_LOG(info) << "vdisplay: "sv << name << " came back in "sv << was_width << 'x' << was_height << 'x' << was_refresh_mhz << " mHz, setting "sv
+                        << _vdisplay_mode.width << 'x' << _vdisplay_mode.height << 'x' << _vdisplay_mode.refresh_mhz << " mHz"sv;
+        VDISPLAY::changeDisplaySettings(nameW.c_str(), _vdisplay_mode.width, _vdisplay_mode.height, _vdisplay_mode.refresh_mhz);
+      }
+    }
+
+    // Windows placed it again; the isolated layout keeps whatever mode it runs now
+    int width = 0;
+    int height = 0;
+    int refresh_mhz = 0;
+    if (config::video.isolated_virtual_display_option && !extends_desktop() && VDISPLAY::getDisplayMode(nameW.c_str(), width, height, refresh_mhz)) {
+      VDISPLAY::changeDisplaySettings2(nameW.c_str(), width, height, refresh_mhz, true);
+    }
+
+    if (config::video.dd.hdr_option == config::video_t::dd_t::hdr_option_e::automatic && VDISPLAY::getDisplayHDRByName(nameW.c_str()) != _launch_session->enable_hdr) {
+      if (wait_for_display_settings()) {
+        apply_virtual_display_hdr(name, _launch_session->enable_hdr, false);
+      } else {
+        BOOST_LOG(warning) << "vdisplay: Windows doesn't accept display changes now, HDR left as it is"sv;
+      }
+    }
+  }
+
+  void proc_t::start_vdisplay_recovery() {
+    stop_vdisplay_recovery();
+    if (!fork_tweaks::vdisplay_recovery_enabled || !virtual_display || !_launch_session) {
+      return;
+    }
+    std::array<std::uint8_t, 16> guid;
+    std::memcpy(guid.data(), &_launch_session->display_guid, guid.size());
+    _vdisplay_recovery = std::make_unique<fork_tweaks::vdisplay_recovery::monitor_t>(guid);
+  }
+
+  void proc_t::stop_vdisplay_recovery() {
+    // Waits for an action in progress; the monitor never waits for the lock, so it can't be waiting
+    // for whoever stops it
+    _vdisplay_recovery.reset();
+  }
 #endif
+
+  std::string proc_t::stream_display() {
+    std::lock_guard lock {display_name_mutex()};
+    return display_name;
+  }
+
+  void proc_t::capture_moved(const std::string &display, bool chosen) {
+    std::lock_guard lock {display_name_mutex()};
+    if (chosen || !virtual_display || display_name.empty()) {
+      display_name = display;
+    }
+  }
 
   int proc_t::running() {
 #ifndef _WIN32
@@ -918,6 +1092,11 @@ namespace proc {
   }
 
   void proc_t::terminate(bool immediate, bool needs_refresh) {
+#ifdef _WIN32
+    // [fork] Before anything changes the display it watches
+    stop_vdisplay_recovery();
+#endif
+
     std::error_code ec;
     placebo = false;
 
@@ -1011,7 +1190,15 @@ namespace proc {
     _app_id = -1;
     _app_name.clear();
     _app = {};
-    display_name.clear();
+    {
+      std::lock_guard lock {display_name_mutex()};
+      display_name.clear();
+    }
+#ifdef _WIN32
+    _vdisplay_name.clear();
+    _vdisplay_id.clear();
+    _vdisplay_mode = {};
+#endif
     initial_display.clear();
     mode_changed_display.clear();
     _launch_session.reset();
@@ -1799,6 +1986,9 @@ namespace proc {
     auto proc_opt = proc::parse(file_name);
 
     if (proc_opt) {
+      // [fork] Capture reads display_name under this lock; no recovery monitor runs here, as the app
+      // was terminated first
+      std::lock_guard lock {display_name_mutex()};
       proc = std::move(*proc_opt);
     }
   }

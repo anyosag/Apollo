@@ -24,6 +24,7 @@ extern "C" {
 #include "config.h"
 #include "display_device.h"
 #include "fork/encoder_probe_reuse.h"
+#include "fork/vdisplay_recovery.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -1163,6 +1164,8 @@ namespace video {
       for (auto &capture_ctx : capture_ctx_queue->unsafe()) {
         capture_ctx.images->stop();
       }
+
+      fork_tweaks::vdisplay_recovery::forget_capture();  // [fork]
     });
 
     auto switch_display_event = mail::man->event<int>(mail::switch_display);
@@ -1177,16 +1180,22 @@ namespace video {
     std::vector<std::string> display_names;
     int display_p = -1;
     std::shared_ptr<platf::display_t> disp;
-    if (!proc::proc.display_name.empty()) {
-      disp = platf::display(encoder.platform_formats->dev_type, proc::proc.display_name, capture_ctxs.front().config);
+    // [fork] Read under a lock: the virtual display's recovery monitor can rename it
+    auto preferred_display = proc::proc.stream_display();
+    if (!preferred_display.empty()) {
+      disp = platf::display(encoder.platform_formats->dev_type, preferred_display, capture_ctxs.front().config);
     }
-    if (!disp) {
+    if (disp) {
+      fork_tweaks::vdisplay_recovery::note_capture(preferred_display);  // [fork]
+    } else {
       // Get all the monitor names now, rather than at boot, to
       // get the most up-to-date list available monitors
       refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
       disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
       if (disp) {
-        proc::proc.display_name = display_names[display_p];
+        // [fork] A virtual display that's gone for a moment stays the display to capture
+        proc::proc.capture_moved(display_names[display_p], false);
+        fork_tweaks::vdisplay_recovery::note_capture(display_names[display_p]);
       } else {
         return;
       }
@@ -1376,17 +1385,26 @@ namespace video {
               disp.reset();
 
               // Refresh display names since a display removal might have caused the reinitialization
-              refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, proc::proc.display_name);
+              // [fork] A copy, read under a lock: the virtual display's recovery monitor can rename it
+              auto preferred = proc::proc.stream_display();
+              refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, preferred);
 
               // Process any pending display switch with the new list of displays
+              // [fork] A negative one only restarts capture on the display it prefers (the recovery monitor's)
+              bool chosen = false;
               if (switch_display_event->peek()) {
-                display_p = std::clamp(*switch_display_event->pop(), 0, (int) display_names.size() - 1);
+                if (auto requested = *switch_display_event->pop(); requested >= 0) {
+                  display_p = std::clamp(requested, 0, (int) display_names.size() - 1);
+                  chosen = true;
+                }
               }
 
               // reset_display() will sleep between retries
               reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
               if (disp) {
-                proc::proc.display_name = display_names[display_p];
+                // [fork] A virtual display that's gone for a moment stays the display to capture
+                proc::proc.capture_moved(display_names[display_p], chosen);
+                fork_tweaks::vdisplay_recovery::note_capture(display_names[display_p]);
                 break;
               }
             }
@@ -2212,13 +2230,17 @@ namespace video {
       refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
 
       // Process any pending display switch with the new list of displays
+      // [fork] A negative one only restarts capture on the display it prefers (the recovery monitor's)
       if (switch_display_event->peek()) {
-        display_p = std::clamp(*switch_display_event->pop(), 0, (int) display_names.size() - 1);
+        if (auto requested = *switch_display_event->pop(); requested >= 0) {
+          display_p = std::clamp(requested, 0, (int) display_names.size() - 1);
+        }
       }
 
       // reset_display() will sleep between retries
       reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], synced_session_ctxs.front()->config);
       if (disp) {
+        fork_tweaks::vdisplay_recovery::note_capture(display_names[display_p]);  // [fork]
         break;
       }
     }
@@ -2363,6 +2385,7 @@ namespace video {
     std::vector<std::string> display_names;
     int display_p = -1;
     while (encode_run_sync(synced_session_ctxs, ctx, display_names, display_p) == encode_e::reinit) {}
+    fork_tweaks::vdisplay_recovery::forget_capture();  // [fork]
   }
 
   void capture_async(
