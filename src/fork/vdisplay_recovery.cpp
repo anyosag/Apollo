@@ -14,7 +14,10 @@
 #include "vdisplay_recovery_policy.h"
 
 #ifdef _WIN32
-  // stream.h's Boost.Asio before misc.h's windows.h, which would bring in WinSock 1 first
+  // As rtsp.cpp has them: network.h's Boost.Asio before windows.h (rtsp.h's, misc.h's), which
+  // would bring in WinSock 1 first, and rtsp.h before stream.h, which uses its launch_session_t
+  #include "src/network.h"
+  #include "src/rtsp.h"
   #include "src/stream.h"
   #include "src/globals.h"
   #include "src/platform/windows/misc.h"
