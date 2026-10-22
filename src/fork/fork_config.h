@@ -55,8 +55,9 @@ namespace fork_tweaks {
   /// the signed-in user's session, until shortly after the stream ends (mac_drive.h).
   inline bool mac_network_drive = true;
 
-  /// `fork_nv_stream_settings`: while someone streams, NVIDIA's driver caps games at the stream's
-  /// frame rate with V-Sync off, and gives Smooth Motion to apps that ask for it (nv_stream.h).
+  /// `fork_nv_stream_settings`: from a stream's launch until its app quits, NVIDIA's driver caps games
+  /// at the stream's frame rate with V-Sync off, and gives Smooth Motion to apps that ask for it
+  /// (nv_stream.h).
   inline bool nv_stream_settings = true;
 
   /// `fork_vdisplay_refresh_multiplier` (1, 2 or 4): the virtual display refreshes this many times

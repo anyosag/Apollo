@@ -1,7 +1,7 @@
 /**
  * @file src/fork/nv_stream.cpp
  * @brief Fork-only: NVIDIA's frame cap, V-Sync off and Smooth Motion while a client streams, in the
- * driver's global profile, put back when the stream ends (nv_stream_policy.h).
+ * driver's global profile from a stream's launch until its app quits (nv_stream_policy.h).
  *
  * The profile is the driver's current global one, or its base profile when it has none, as in
  * Vibepollo (github.com/Nonary/Vibepollo, GPLv3). Each call loads NVAPI, opens a settings session

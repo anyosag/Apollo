@@ -1,7 +1,7 @@
 /**
  * @file src/fork/nv_stream.h
  * @brief Fork-only: NVIDIA's frame cap, V-Sync off and Smooth Motion while a client streams, in the
- * driver's global profile, put back when the stream ends (nv_stream_policy.h).
+ * driver's global profile from a stream's launch until its app quits (nv_stream_policy.h).
  */
 #pragma once
 
