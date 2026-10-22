@@ -6,11 +6,11 @@
  *
  * From a stream's launch until its app quits, the driver caps every game at the stream's frame rate
  * (Max Frame Rate) and forces V-Sync off, so a game renders the frames the stream sends, and the
- * virtual display can refresh at 4x the stream's rate without games rendering 4x the frames. An app can opt out of both
- * (`fork-nv-cap`), and opt in to Smooth Motion, the driver's frame generation
- * (`fork-smooth-motion`). The global profile's own values are remembered first, in memory and in a
- * journal, and put back when the app quits, or at Apollo's next start after a crash. A value
- * someone changed during the stream is theirs and stays.
+ * virtual display can refresh at 4x the stream's rate without games rendering 4x the frames. An
+ * app can opt out of both (`fork-nv-cap`), and opt in to Smooth Motion, the driver's frame
+ * generation (`fork-smooth-motion`). The global profile's own values are remembered first, in
+ * memory and in a journal, and put back when the app quits, or at Apollo's next start after a
+ * crash. A value someone changed during the stream is theirs and stays.
  *
  * After Vibepollo's NVIDIA Control Panel frame limiter (github.com/Nonary/Vibepollo, GPLv3).
  *
