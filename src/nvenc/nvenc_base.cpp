@@ -582,9 +582,13 @@ namespace nvenc {
   }
 
   // [fork] fork/adaptive_bitrate.h
-  bool nvenc_base::set_bitrate(int bitrate_kbps) {
-    if (!encoder || !fork_reconfigure.dynamic_bitrate || bitrate_kbps <= 0) {
-      return false;
+  fork_tweaks::adaptive_bitrate::change_e nvenc_base::set_bitrate(int bitrate_kbps) {
+    using fork_tweaks::adaptive_bitrate::change_e;
+    if (!encoder || !fork_reconfigure.dynamic_bitrate) {
+      return change_e::unsupported;
+    }
+    if (bitrate_kbps <= 0) {
+      return change_e::failed;
     }
 
     // Everything as create_encoder() set it, but the bitrate and the VBV sized for it the same way
@@ -602,12 +606,12 @@ namespace nvenc {
 
     if (nvenc_failed(nvenc->nvEncReconfigureEncoder(encoder, &reconfigure_params))) {
       BOOST_LOG(error) << "NvEnc: NvEncReconfigureEncoder() for " << bitrate_kbps << " kbps failed: " << last_nvenc_error_string;
-      return false;
+      return change_e::failed;
     }
 
     fork_reconfigure.enc_config = enc_config;
     BOOST_LOG(debug) << "NvEnc: bitrate changed to " << bitrate_kbps << " kbps, VBV " << enc_config.rcParams.vbvBufferSize << " bits";
-    return true;
+    return change_e::changed;
   }
 
   bool nvenc_base::invalidate_ref_frames(uint64_t first_frame, uint64_t last_frame) {

@@ -111,7 +111,7 @@ static void test_requests() {
   auto kbps = take(live);
   CHECK(kbps && *kbps == encoder_kbps(live.launch, 10000));
   CHECK(!take(live));
-  done(live, *kbps, true);
+  done(live, *kbps, change_e::changed);
   now = status(live);
   CHECK(now.encoder == *kbps && !now.pending && now.live);
   CHECK(request(live, 10000) == request_e::unchanged);
@@ -122,7 +122,7 @@ static void test_requests() {
   CHECK(request(live, 7000) == request_e::queued);
   kbps = take(live);
   CHECK(kbps && *kbps == encoder_kbps(live.launch, 7000));
-  done(live, *kbps, true);
+  done(live, *kbps, change_e::changed);
 
   // Asking for what runs while a change waits cancels the change
   CHECK(request(live, 3000) == request_e::queued);
@@ -134,14 +134,39 @@ static void test_requests() {
   CHECK(request(live, 20000) == request_e::queued);
   kbps = take(live);
   CHECK(kbps && *kbps == launch_encoder);
-  done(live, *kbps, true);
+  done(live, *kbps, change_e::changed);
   CHECK(status(live).encoder == launch_encoder);
+
+  // A request while the encode thread changes to another: compared with the one it changes to,
+  // so asking for the bitrate from before isn't lost as "unchanged"
+  CHECK(request(live, 9000) == request_e::queued);
+  kbps = take(live);
+  CHECK(request(live, 20000) == request_e::queued);
+  done(live, *kbps, change_e::changed);
+  auto again = take(live);
+  CHECK(again && *again == launch_encoder);
+  done(live, *again, change_e::changed);
+  CHECK(status(live).encoder == launch_encoder);
+
+  // One that fails once keeps its bitrate, and the next request is tried
+  CHECK(request(live, 9000) == request_e::queued);
+  kbps = take(live);
+  done(live, *kbps, change_e::failed);
+  now = status(live);
+  CHECK(now.live && !now.pending && now.encoder == launch_encoder);
+  CHECK(request(live, 9000) == request_e::queued);
+  kbps = take(live);
+  done(live, *kbps, change_e::changed);
+  CHECK(status(live).encoder == *kbps);
+  CHECK(request(live, 20000) == request_e::queued);
+  kbps = take(live);
+  done(live, *kbps, change_e::changed);
 
   // An encoder that can't: refused from then on
   CHECK(request(live, 8000) == request_e::queued);
   kbps = take(live);
   CHECK(kbps.has_value());
-  done(live, *kbps, false);
+  done(live, *kbps, change_e::unsupported);
   now = status(live);
   CHECK(!now.live && !now.pending);
   CHECK(now.encoder == launch_encoder);
@@ -155,8 +180,22 @@ static void test_requests() {
   CHECK(restart_kbps(none, 12345) == 12345);
 }
 
+static void test_parse() {
+  CHECK(parse_kbps(R"({"kbps":14000})") == 14000);
+  CHECK(parse_kbps(R"({"kbps":14000,"other":1})") == 14000);
+  CHECK(!parse_kbps(R"({"kbps":0})"));
+  CHECK(!parse_kbps(R"({"kbps":-5})"));
+  CHECK(!parse_kbps(R"({"kbps":1.5})"));
+  CHECK(!parse_kbps(R"({"kbps":"14000"})"));
+  CHECK(!parse_kbps(R"({"bitrate":14000})"));
+  CHECK(!parse_kbps(R"([14000])"));
+  CHECK(!parse_kbps("kbps=14000"));
+  CHECK(!parse_kbps(""));
+}
+
 int main() {
   test_conversion();
+  test_parse();
   test_limits();
   test_requests();
   if (s_Failures) {

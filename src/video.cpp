@@ -428,8 +428,11 @@ namespace video {
     }
 
     // [fork] NVENC reconfigures in place (fork/adaptive_bitrate.h)
-    bool set_bitrate(int kbps) override {
-      return device && device->nvenc && device->nvenc->set_bitrate(kbps);
+    fork_tweaks::adaptive_bitrate::change_e set_bitrate(int kbps) override {
+      if (!device || !device->nvenc) {
+        return fork_tweaks::adaptive_bitrate::change_e::unsupported;
+      }
+      return device->nvenc->set_bitrate(kbps);
     }
 
     nvenc::nvenc_encoded_frame encode_frame(uint64_t frame_index) {

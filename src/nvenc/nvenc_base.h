@@ -73,9 +73,9 @@ namespace nvenc {
      * @brief [fork] Change the bitrate between two frames with `nvEncReconfigureEncoder()`, without a
      *        keyframe, keeping everything else as `create_encoder()` set it (fork/adaptive_bitrate.h).
      * @param bitrate_kbps The new encoder bitrate.
-     * @return `true` on success; `false` if the GPU or driver can't, and the bitrate stays as it was.
+     * @return Whether it changed; if not, the bitrate stays as it was, for good if the GPU can't.
      */
-    bool set_bitrate(int bitrate_kbps);
+    fork_tweaks::adaptive_bitrate::change_e set_bitrate(int bitrate_kbps);
 
   protected:
     /**

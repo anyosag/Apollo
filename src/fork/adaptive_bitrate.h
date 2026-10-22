@@ -23,6 +23,9 @@
 #include <optional>
 #include <string>
 
+// lib includes
+#include <nlohmann/json.hpp>
+
 namespace fork_tweaks::adaptive_bitrate {
   /// The lowest bitrate a request can set, in kbps; LuzLunar keeps its own floor above it
   constexpr std::int64_t min_kbps = 1000;
@@ -65,6 +68,23 @@ namespace fork_tweaks::adaptive_bitrate {
     return std::clamp(client_kbps, floor_kbps(launch), launch.client_kbps);
   }
 
+  /// POST /actions/bitrate's body, {"kbps": N} with N a positive whole number
+  inline std::optional<std::int64_t> parse_kbps(const std::string &body) {
+    auto json = nlohmann::json::parse(body, nullptr, false);
+    if (json.is_discarded() || !json.is_object()) {
+      return std::nullopt;
+    }
+    auto it = json.find("kbps");
+    if (it == json.end() || !it->is_number_integer()) {
+      return std::nullopt;
+    }
+    auto kbps = it->get<std::int64_t>();
+    if (kbps <= 0) {
+      return std::nullopt;
+    }
+    return kbps;
+  }
+
   /// NVENC's VBV size in bits for a bitrate, as nvenc_base's create_encoder() sizes it: one frame,
   /// plus `nvenc_vbv_increase` percent
   inline std::uint32_t vbv_bits(std::int64_t kbps, std::uint32_t framerate, int increase_percent) {
@@ -85,6 +105,7 @@ namespace fork_tweaks::adaptive_bitrate {
     std::mutex mutex;
     std::int64_t target = 0;  ///< The client bitrate asked for last; 0 before any request
     std::int64_t requested = 0;  ///< An encoder bitrate waiting for the encode thread; 0 for none
+    std::int64_t in_flight = 0;  ///< The encoder bitrate the encode thread is changing to; 0 for none
     std::int64_t applied = 0;  ///< The encoder bitrate in effect; 0 while it's the launch one
     bool refused = false;  ///< The encoder can't change its bitrate while streaming
     std::atomic<bool> pending {false};  ///< `requested` waits; read by every frame without the lock
@@ -111,7 +132,11 @@ namespace fork_tweaks::adaptive_bitrate {
     }
     live.target = clamp(live.launch, client_kbps);
     auto encoder = encoder_kbps(live.launch, live.target);
-    auto in_effect = live.applied ? live.applied : encoder_kbps(live.launch, live.launch.client_kbps);
+    // A change the encode thread is making counts as made: comparing with the bitrate before it
+    // would answer "unchanged" to a request for that bitrate and lose it
+    auto in_effect = live.in_flight ? live.in_flight :
+                     live.applied   ? live.applied :
+                                      encoder_kbps(live.launch, live.launch.client_kbps);
     if (encoder == in_effect) {
       // Back to what runs: a change still waiting has nothing left to do
       live.requested = 0;
@@ -138,18 +163,32 @@ namespace fork_tweaks::adaptive_bitrate {
     if (kbps <= 0) {
       return std::nullopt;
     }
+    live.in_flight = kbps;
     return kbps;
   }
 
-  /// The encode thread's side: whether the encoder took the bitrate take() gave it
-  inline void done(live_t &live, std::int64_t kbps, bool changed) {
+  /// What an encoder did with a bitrate
+  enum class change_e {
+    changed,
+    unsupported,  ///< It can't change its bitrate while streaming, ever
+    failed,  ///< Not this time; it keeps the bitrate it had, and a later request may work
+  };
+
+  /// The encode thread's side: what the encoder did with the bitrate take() gave it
+  inline void done(live_t &live, std::int64_t kbps, change_e change) {
     std::lock_guard lg(live.mutex);
-    if (changed) {
-      live.applied = kbps;
-    } else {
-      live.refused = true;
-      live.requested = 0;
-      live.pending = false;
+    live.in_flight = 0;
+    switch (change) {
+      case change_e::changed:
+        live.applied = kbps;
+        break;
+      case change_e::unsupported:
+        live.refused = true;
+        live.requested = 0;
+        live.pending = false;
+        break;
+      case change_e::failed:
+        break;
     }
   }
 
@@ -211,5 +250,5 @@ namespace fork_tweaks::adaptive_bitrate {
    * @param bitrate The encode loop's config.bitrate, updated when the encoder took it.
    * @param set_bitrate The encode session's set_bitrate().
    */
-  void apply(live_t &live, int &bitrate, const std::function<bool(int kbps)> &set_bitrate);
+  void apply(live_t &live, int &bitrate, const std::function<change_e(int kbps)> &set_bitrate);
 }  // namespace fork_tweaks::adaptive_bitrate

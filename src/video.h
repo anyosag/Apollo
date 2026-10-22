@@ -218,9 +218,9 @@ namespace video {
 
     virtual void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) = 0;
 
-    /// [fork] Change the bitrate between two frames, without a keyframe; false if the encoder can't
-    virtual bool set_bitrate([[maybe_unused]] int kbps) {
-      return false;
+    /// [fork] Change the bitrate between two frames, without a keyframe
+    virtual fork_tweaks::adaptive_bitrate::change_e set_bitrate([[maybe_unused]] int kbps) {
+      return fork_tweaks::adaptive_bitrate::change_e::unsupported;
     }
   };
 
