@@ -30,6 +30,7 @@
 #include "fork/adaptive_bitrate.h"  // [fork]
 #include "fork/clipboard_bundle.h"  // [fork]
 #include "fork/clipboard_files.h"  // [fork]
+#include "fork/cursor_position.h"  // [fork]
 #include "fork/host_sleep.h"  // [fork]
 #include "fork/mac_drive.h"  // [fork]
 #include "fork/touch_emulation.h"  // [fork]
@@ -1028,6 +1029,7 @@ namespace nvhttp {
       tree.put("root.LuzSleep", fork_tweaks::host_sleep::supported() ? 1 : 0);  // [fork] /actions/sleep works
       tree.put("root.LuzBitrate", fork_tweaks::adaptive_bitrate::supported() ? 1 : 0);  // [fork] /actions/bitrate works
       tree.put("root.LuzBitrateStart", fork_tweaks::adaptive_bitrate::supported() ? 1 : 0);  // [fork] and the stream starts at luzBitrate
+      tree.put("root.LuzCursor", fork_tweaks::cursor_position::supported() ? 1 : 0);  // [fork] /actions/cursor works
       tree.put("root.VirtualDisplayCapable", true);
       if (!!(named_cert_p->perm & PERM::_all_actions)) {
         tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK);
@@ -1910,6 +1912,18 @@ namespace nvhttp {
     response->write(static_cast<SimpleWeb::StatusCode>(reply.status), reply.body, headers);
   }
 
+  void forkCursor(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    auto named_cert_p = get_verified_cert(request);
+    fork_tweaks::cursor_position::client_t client {named_cert_p->name, named_cert_p->uuid, !!(named_cert_p->perm & PERM::_allow_view)};
+    auto reply = fork_tweaks::cursor_position::handle(client, request->method);
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    response->write(static_cast<SimpleWeb::StatusCode>(reply.status), reply.body, headers);
+  }
+
   void setup(const std::string &pkey, const std::string &cert) {
     conf_intern.pkey = pkey;
     conf_intern.servercert = cert;
@@ -2018,6 +2032,7 @@ namespace nvhttp {
     https_server.resource["^/actions/sleep$"]["POST"] = forkSleep;  // [fork]
     https_server.resource["^/actions/bitrate$"]["GET"] = forkBitrate;  // [fork]
     https_server.resource["^/actions/bitrate$"]["POST"] = forkBitrate;  // [fork]
+    https_server.resource["^/actions/cursor$"]["GET"] = forkCursor;  // [fork]
 
     https_server.config.reuse_address = true;
     https_server.config.address = net::af_to_any_address_string(address_family);
