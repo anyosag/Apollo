@@ -23,6 +23,7 @@ extern "C" {
 #include "cbs.h"
 #include "config.h"
 #include "display_device.h"
+#include "fork/cursor_position.h"
 #include "fork/encoder_probe_reuse.h"
 #include "fork/vdisplay_recovery.h"
 #include "globals.h"
@@ -2210,6 +2211,7 @@ namespace video {
 
     // absolute mouse coordinates require that the dimensions of the screen are known
     ctx.touch_port_events->raise(make_port(disp, ctx.config));
+    fork_tweaks::cursor_position::set_display({disp->offset_x, disp->offset_y, disp->width, disp->height});  // [fork] for LuzLunar's GET /actions/cursor
 
     // Update client with our current HDR display state
     hdr_info_t hdr_info = std::make_unique<hdr_info_raw_t>(false);
@@ -2486,6 +2488,7 @@ namespace video {
 
       // absolute mouse coordinates require that the dimensions of the screen are known
       touch_port_event->raise(make_port(display.get(), config));
+      fork_tweaks::cursor_position::set_display({display->offset_x, display->offset_y, display->width, display->height});  // [fork] for LuzLunar's GET /actions/cursor
 
       // Update client with our current HDR display state
       hdr_info_t hdr_info = std::make_unique<hdr_info_raw_t>(false);
