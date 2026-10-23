@@ -436,6 +436,11 @@ namespace video {
       return device->nvenc->set_bitrate(kbps);
     }
 
+    // [fork] When the GPU reports NV_ENC_CAPS_SUPPORT_DYN_BITRATE_CHANGE
+    bool can_change_bitrate() const override {
+      return device && device->nvenc && device->nvenc->dynamic_bitrate();
+    }
+
     nvenc::nvenc_encoded_frame encode_frame(uint64_t frame_index) {
       if (!device || !device->nvenc) {
         return {};
@@ -1955,6 +1960,11 @@ namespace video {
       return;
     }
 
+    // [fork] LuzLunar learns at once whether this encoder can change its bitrate, before asking
+    if (config.fork_bitrate) {
+      fork_tweaks::adaptive_bitrate::ready(*config.fork_bitrate, session->can_change_bitrate());
+    }
+
     // As a workaround for NVENC hangs and to generally speed up encoder reinit,
     // we will complete the encoder teardown in a separate thread if supported.
     // This will move expensive processing off the encoder thread to allow us
@@ -2216,6 +2226,11 @@ namespace video {
     auto session = make_encode_session(disp, encoder, ctx.config, img.width, img.height, std::move(encode_device));
     if (!session) {
       return std::nullopt;
+    }
+
+    // [fork] As encode_run()'s: this path never changes the bitrate, which can_change_bitrate() says
+    if (ctx.config.fork_bitrate) {
+      fork_tweaks::adaptive_bitrate::ready(*ctx.config.fork_bitrate, session->can_change_bitrate());
     }
 
     // Load the initial image to prepare for encoding

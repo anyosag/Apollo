@@ -128,6 +128,7 @@ namespace fork_tweaks::adaptive_bitrate {
     std::int64_t in_flight = 0;  ///< The encoder bitrate the encode thread is changing to; 0 for none
     std::int64_t applied = 0;  ///< The encoder bitrate in effect, or the one it's created at (start()); 0 while it's the launch one
     bool refused = false;  ///< The encoder can't change its bitrate while streaming
+    bool known = false;  ///< An encoder exists and said whether it can (encoder_ready())
     std::atomic<bool> pending {false};  ///< `requested` waits; read by every frame without the lock
   };
 
@@ -228,6 +229,22 @@ namespace fork_tweaks::adaptive_bitrate {
     }
   }
 
+  /**
+   * @brief The encode thread's side, as soon as it has created an encoder (first, or after a capture
+   * restart): whether it can change its bitrate while streaming. One that can't refuses every request
+   * from now on, so GET says live:false and POST gets 409 before any is tried, and a request queued
+   * before it existed is dropped. One that can takes a queued request before its next frame.
+   */
+  inline void encoder_ready(live_t &live, bool can_change) {
+    std::lock_guard lg(live.mutex);
+    live.known = true;
+    live.refused = !can_change;
+    if (!can_change) {
+      live.requested = 0;
+      live.pending = false;
+    }
+  }
+
   /// The bitrate an encoder is created at, first or after a capture restart: the one changed to last, or start()'s, if any
   inline std::int64_t restart_kbps(live_t &live, std::int64_t launch_kbps) {
     std::lock_guard lg(live.mutex);
@@ -241,6 +258,7 @@ namespace fork_tweaks::adaptive_bitrate {
     std::int64_t min = 0;  ///< The lowest a request can set
     std::int64_t max = 0;  ///< The highest: the launch bitrate
     bool live = true;  ///< The encoder can change its bitrate while streaming, as far as it's known
+    bool known = false;  ///< An encoder exists, so live is its answer rather than a guess
     bool pending = false;  ///< A change waits for the encode thread
   };
 
@@ -252,6 +270,7 @@ namespace fork_tweaks::adaptive_bitrate {
     status.target = live.target ? live.target : live.launch.client_kbps;
     status.encoder = live.applied ? live.applied : encoder_kbps(live.launch, live.launch.client_kbps);
     status.live = !live.refused && live.launch.client_kbps > 0;
+    status.known = live.known;
     status.pending = live.pending.load();
     return status;
   }
@@ -287,4 +306,7 @@ namespace fork_tweaks::adaptive_bitrate {
    * @param set_bitrate The encode session's set_bitrate().
    */
   void apply(live_t &live, int &bitrate, const std::function<change_e(int kbps)> &set_bitrate);
+
+  /// encoder_ready(), logged when an encoder can't change its bitrate
+  void ready(live_t &live, bool can_change);
 }  // namespace fork_tweaks::adaptive_bitrate

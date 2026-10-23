@@ -222,6 +222,11 @@ namespace video {
     virtual fork_tweaks::adaptive_bitrate::change_e set_bitrate([[maybe_unused]] int kbps) {
       return fork_tweaks::adaptive_bitrate::change_e::unsupported;
     }
+
+    /// [fork] Whether set_bitrate() can work, as soon as the session exists
+    virtual bool can_change_bitrate() const {
+      return false;
+    }
   };
 
   // encoders

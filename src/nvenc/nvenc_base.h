@@ -77,6 +77,14 @@ namespace nvenc {
      */
     fork_tweaks::adaptive_bitrate::change_e set_bitrate(int bitrate_kbps);
 
+    /**
+     * @brief [fork] Whether set_bitrate() can work: the GPU reported
+     *        `NV_ENC_CAPS_SUPPORT_DYN_BITRATE_CHANGE` when `create_encoder()` made the encoder.
+     */
+    bool dynamic_bitrate() const {
+      return fork_reconfigure.dynamic_bitrate;
+    }
+
   protected:
     /**
      * @brief Required. Used for loading NvEnc library and setting `nvenc` variable with `NvEncodeAPICreateInstance()`.
