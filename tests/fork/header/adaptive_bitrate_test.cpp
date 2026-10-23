@@ -237,6 +237,49 @@ static void test_start() {
   CHECK(status(unasked).target == 25000 && restart_kbps(unasked, launch_encoder) == launch_encoder);
 }
 
+// The encode thread says whether its encoder can change, as soon as it has one
+static void test_ready() {
+  live_t live;
+  live.launch = launch(25000);
+  const auto launch_encoder = encoder_kbps(live.launch, 25000);
+
+  // Before an encoder exists, live is a guess
+  auto now = status(live);
+  CHECK(now.live && !now.known);
+
+  // A request queued before the encoder existed, which turns out not to change: dropped, and
+  // refused from then on without any try
+  CHECK(request(live, 20000) == request_e::queued);
+  encoder_ready(live, false);
+  now = status(live);
+  CHECK(!now.live && now.known && !now.pending);
+  CHECK(!take(live));
+  CHECK(request(live, 18000) == request_e::not_live);
+  CHECK(now.encoder == launch_encoder);
+
+  // A capture restart's encoder that can: live again
+  encoder_ready(live, true);
+  now = status(live);
+  CHECK(now.live && now.known);
+  CHECK(request(live, 18000) == request_e::queued);
+  auto kbps = take(live);
+  CHECK(kbps.has_value());
+  done(live, *kbps, change_e::changed);
+  CHECK(status(live).encoder == *kbps);
+
+  // One that can keeps a request queued before it existed
+  live_t early;
+  early.launch = launch(25000);
+  CHECK(request(early, 20000) == request_e::queued);
+  encoder_ready(early, true);
+  CHECK(status(early).pending && take(early).has_value());
+
+  // A stream with no bitrate to change stays not live
+  live_t none;
+  encoder_ready(none, true);
+  CHECK(!status(none).live && status(none).known);
+}
+
 static void test_parse() {
   CHECK(parse_kbps(R"({"kbps":14000})") == 14000);
   CHECK(parse_kbps(R"({"kbps":14000,"other":1})") == 14000);
@@ -268,6 +311,7 @@ int main() {
   test_limits();
   test_requests();
   test_start();
+  test_ready();
   if (s_Failures) {
     std::printf("%d failure(s)\n", s_Failures);
     return 1;

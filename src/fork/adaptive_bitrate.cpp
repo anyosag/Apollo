@@ -34,6 +34,7 @@ namespace fork_tweaks::adaptive_bitrate {
         {"min", status.min},
         {"max", status.max},
         {"live", status.live},
+        {"known", status.known},
         {"pending", status.pending},
       }
         .dump();
@@ -107,6 +108,13 @@ namespace fork_tweaks::adaptive_bitrate {
       case change_e::unsupported:
         BOOST_LOG(warning) << "fork: adaptive bitrate: this encoder can't change its bitrate while streaming; it stays at "sv << bitrate << " kbps"sv;
         break;
+    }
+  }
+
+  void ready(live_t &live, bool can_change) {
+    encoder_ready(live, can_change);
+    if (!can_change && live.launch.client_kbps > 0) {
+      BOOST_LOG(info) << "fork: adaptive bitrate: this encoder can't change its bitrate while streaming; requests get 409"sv;
     }
   }
 }  // namespace fork_tweaks::adaptive_bitrate
