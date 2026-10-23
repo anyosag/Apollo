@@ -1154,6 +1154,13 @@ namespace rtsp_stream {
     if (config.monitor.fork_bitrate) {
       config.monitor.fork_bitrate->launch.fec_percentage = config::stream.fec_percentage;
       config.monitor.fork_bitrate->launch.audio_kbps = fork_tweaks::adaptive_bitrate::audio_kbps(config.audio.flags[audio::config_t::HIGH_QUALITY], config.audio.channels);
+
+      // LuzLunar launched above its own bitrate to leave room to raise it: the encoder starts at its own
+      if (session.luz_bitrate_kbps > 0) {
+        fork_tweaks::adaptive_bitrate::start(*config.monitor.fork_bitrate, session.luz_bitrate_kbps);
+        auto now = fork_tweaks::adaptive_bitrate::status(*config.monitor.fork_bitrate);
+        BOOST_LOG(info) << "fork: adaptive bitrate: the stream starts at "sv << now.target << " kbps ("sv << now.encoder << " kbps for the encoder) and can go up to "sv << now.max << " kbps"sv;
+      }
     }
 
     if (config.monitor.videoFormat == 1 && video::active_hevc_mode == 1) {

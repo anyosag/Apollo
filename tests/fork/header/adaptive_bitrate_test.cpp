@@ -180,6 +180,63 @@ static void test_requests() {
   CHECK(restart_kbps(none, 12345) == 12345);
 }
 
+// A client that launched a quarter above its own bitrate: the encoder is created at its own
+static void test_start() {
+  live_t live;
+  live.launch = launch(25000);
+  const auto launch_encoder = encoder_kbps(live.launch, 25000);
+  const auto own_encoder = encoder_kbps(live.launch, 20000);
+
+  start(live, 20000);
+  auto now = status(live);
+  CHECK(now.target == 20000);
+  CHECK(now.encoder == own_encoder);
+  CHECK(now.max == 25000 && now.live && !now.pending);
+  // Nothing for the encode thread: the encoder is created at it
+  CHECK(!take(live));
+  CHECK(restart_kbps(live, launch_encoder) == own_encoder);
+  CHECK(request(live, 20000) == request_e::unchanged);
+
+  // Raised to the launch bitrate later, and no further
+  CHECK(request(live, 30000) == request_e::queued);
+  auto kbps = take(live);
+  CHECK(kbps && *kbps == launch_encoder);
+  done(live, *kbps, change_e::changed);
+  CHECK(status(live).target == 25000 && status(live).encoder == launch_encoder);
+  CHECK(restart_kbps(live, launch_encoder) == launch_encoder);
+
+  // An encoder that can't change its bitrate still starts at the client's own
+  live_t fixed;
+  fixed.launch = launch(25000);
+  start(fixed, 20000);
+  CHECK(restart_kbps(fixed, launch_encoder) == own_encoder);
+  CHECK(request(fixed, 25000) == request_e::queued);
+  kbps = take(fixed);
+  done(fixed, *kbps, change_e::unsupported);
+  CHECK(!status(fixed).live && status(fixed).encoder == own_encoder && status(fixed).target == 25000);
+  CHECK(restart_kbps(fixed, launch_encoder) == own_encoder);
+
+  // Clamped like a request: above the launch bitrate it's the launch bitrate, which needs nothing
+  live_t above;
+  above.launch = launch(25000);
+  start(above, 40000);
+  CHECK(status(above).target == 25000 && status(above).encoder == launch_encoder);
+  CHECK(restart_kbps(above, launch_encoder) == launch_encoder);
+  live_t below;
+  below.launch = launch(25000);
+  start(below, 200);
+  CHECK(status(below).target == 1000);
+
+  // Nothing to start: no launch bitrate, or none asked for
+  live_t none;
+  start(none, 20000);
+  CHECK(status(none).target == 0 && restart_kbps(none, 12345) == 12345);
+  live_t unasked;
+  unasked.launch = launch(25000);
+  start(unasked, 0);
+  CHECK(status(unasked).target == 25000 && restart_kbps(unasked, launch_encoder) == launch_encoder);
+}
+
 static void test_parse() {
   CHECK(parse_kbps(R"({"kbps":14000})") == 14000);
   CHECK(parse_kbps(R"({"kbps":14000,"other":1})") == 14000);
@@ -191,6 +248,18 @@ static void test_parse() {
   CHECK(!parse_kbps(R"([14000])"));
   CHECK(!parse_kbps("kbps=14000"));
   CHECK(!parse_kbps(""));
+
+  CHECK(parse_start_kbps("20000") == 20000);
+  CHECK(parse_start_kbps("1") == 1);
+  CHECK(parse_start_kbps("999999999") == 999999999);
+  CHECK(!parse_start_kbps(""));
+  CHECK(!parse_start_kbps("0"));
+  CHECK(!parse_start_kbps("-20000"));
+  CHECK(!parse_start_kbps("+20000"));
+  CHECK(!parse_start_kbps("20000kbps"));
+  CHECK(!parse_start_kbps(" 20000"));
+  CHECK(!parse_start_kbps("20.5"));
+  CHECK(!parse_start_kbps("1000000000"));
 }
 
 int main() {
@@ -198,6 +267,7 @@ int main() {
   test_parse();
   test_limits();
   test_requests();
+  test_start();
   if (s_Failures) {
     std::printf("%d failure(s)\n", s_Failures);
     return 1;

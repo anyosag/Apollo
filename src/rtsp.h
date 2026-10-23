@@ -6,6 +6,7 @@
 
 // standard includes
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <list>
 #include <optional>
@@ -69,6 +70,10 @@ namespace rtsp_stream {
 
     /// [fork] LuzLunar asked for its Mac trackpad mode (luzTrackpad=mac, fork/pointer_speed.h)
     bool mac_trackpad = false;
+
+    /// [fork] LuzLunar's own bitrate in kbps (luzBitrate=N), which the encoder starts at: it launched a quarter above it
+    /// to leave room to raise it (fork/adaptive_bitrate.h); 0 from other clients
+    std::int64_t luz_bitrate_kbps = 0;
 
   #ifdef _WIN32
     GUID display_guid{};

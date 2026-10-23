@@ -10,6 +10,11 @@
  * thread changes NVENC's bitrate between two frames, without a keyframe (nvenc_base's
  * set_bitrate()). Other encoders can't, and the client hears so.
  *
+ * Since a request never goes above the launch bitrate, LuzLunar launches a quarter above its own
+ * and says what its own is (luzBitrate=N in /launch and /resume): the encoder is created at N
+ * (start()), so the stream runs at N from its first frame and can still be raised to the launch
+ * bitrate later.
+ *
  * Plain C++ apart from the declarations at the end, so tests can build it on its own.
  */
 #pragma once
@@ -17,11 +22,13 @@
 // standard includes
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <cstdint>
 #include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 
 // lib includes
 #include <nlohmann/json.hpp>
@@ -85,6 +92,19 @@ namespace fork_tweaks::adaptive_bitrate {
     return kbps;
   }
 
+  /// /launch's and /resume's luzBitrate=N: N a positive whole number of kbps, digits only
+  inline std::optional<std::int64_t> parse_start_kbps(std::string_view arg) {
+    if (arg.empty() || arg.size() > 9) {
+      return std::nullopt;
+    }
+    std::int64_t kbps = 0;
+    auto [end, error] = std::from_chars(arg.data(), arg.data() + arg.size(), kbps);
+    if (error != std::errc {} || end != arg.data() + arg.size() || kbps <= 0) {
+      return std::nullopt;
+    }
+    return kbps;
+  }
+
   /// NVENC's VBV size in bits for a bitrate, as nvenc_base's create_encoder() sizes it: one frame,
   /// plus `nvenc_vbv_increase` percent
   inline std::uint32_t vbv_bits(std::int64_t kbps, std::uint32_t framerate, int increase_percent) {
@@ -106,10 +126,26 @@ namespace fork_tweaks::adaptive_bitrate {
     std::int64_t target = 0;  ///< The client bitrate asked for last; 0 before any request
     std::int64_t requested = 0;  ///< An encoder bitrate waiting for the encode thread; 0 for none
     std::int64_t in_flight = 0;  ///< The encoder bitrate the encode thread is changing to; 0 for none
-    std::int64_t applied = 0;  ///< The encoder bitrate in effect; 0 while it's the launch one
+    std::int64_t applied = 0;  ///< The encoder bitrate in effect, or the one it's created at (start()); 0 while it's the launch one
     bool refused = false;  ///< The encoder can't change its bitrate while streaming
     std::atomic<bool> pending {false};  ///< `requested` waits; read by every frame without the lock
   };
+
+  /**
+   * @brief Before the stream starts, once its launch_t is set: the bitrate the encoder is created at,
+   * for a client that launched above its own bitrate to leave room to raise it (luzBitrate=N),
+   * clamped like a request. It counts as changed to already, so every encoder starts at it
+   * (restart_kbps()), even one that can't change its bitrate later.
+   */
+  inline void start(live_t &live, std::int64_t client_kbps) {
+    if (live.launch.client_kbps <= 0 || client_kbps <= 0) {
+      return;
+    }
+    std::lock_guard lg(live.mutex);
+    live.target = clamp(live.launch, client_kbps);
+    auto encoder = encoder_kbps(live.launch, live.target);
+    live.applied = encoder == encoder_kbps(live.launch, live.launch.client_kbps) ? 0 : encoder;
+  }
 
   /// What became of a request
   enum class request_e {
@@ -192,7 +228,7 @@ namespace fork_tweaks::adaptive_bitrate {
     }
   }
 
-  /// The bitrate an encoder starts with after a capture restart: the one changed to last, if any
+  /// The bitrate an encoder is created at, first or after a capture restart: the one changed to last, or start()'s, if any
   inline std::int64_t restart_kbps(live_t &live, std::int64_t launch_kbps) {
     std::lock_guard lg(live.mutex);
     return live.applied ? live.applied : launch_kbps;
