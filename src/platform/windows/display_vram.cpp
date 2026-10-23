@@ -22,6 +22,7 @@ extern "C" {
 #include "display.h"
 #include "misc.h"
 #include "src/config.h"
+#include "src/fork/cursor_pulse.h"  // [fork]
 #include "src/logging.h"
 #include "src/nvenc/nvenc_config.h"
 #include "src/nvenc/nvenc_d3d11_native.h"
@@ -1151,17 +1152,26 @@ namespace platf::dxgi {
     HRESULT status;
     DXGI_OUTDUPL_FRAME_INFO frame_info;
 
+    // [fork] While LuzLunar's cursor pulse runs, a frame goes out each time, with the cursor drawn
+    // as the pulse has it now, even when nothing else changed (fork/cursor_pulse.h)
+    const bool fork_pulsing = cursor_visible && (cursor_alpha.visible || cursor_xor.visible) &&
+                              !std::holds_alternative<std::monostate>(last_frame_variant) && fork_tweaks::cursor_pulse::animating();
+
     resource_t::pointer res_p {};
-    auto capture_status = dup.next_frame(frame_info, timeout, &res_p);
+    auto capture_status = dup.next_frame(frame_info, fork_pulsing ? std::min(timeout, std::chrono::milliseconds {4}) : timeout, &res_p);
     resource_t res {res_p};
 
-    if (capture_status != capture_e::ok) {
+    bool fork_pulse_frame = false;  // [fork] no frame from Desktop Duplication: the last one, with the pulsing cursor
+    if (capture_status == capture_e::timeout && fork_pulsing) {
+      frame_info = {};
+      fork_pulse_frame = true;
+    } else if (capture_status != capture_e::ok) {
       return capture_status;
     }
 
     const bool mouse_update_flag = frame_info.LastMouseUpdateTime.QuadPart != 0 || frame_info.PointerShapeBufferSize > 0;
     const bool frame_update_flag = frame_info.LastPresentTime.QuadPart != 0;
-    const bool update_flag = mouse_update_flag || frame_update_flag;
+    const bool update_flag = mouse_update_flag || frame_update_flag || fork_pulsing;  // [fork] fork_pulsing
 
     if (!update_flag) {
       return capture_e::timeout;
@@ -1171,6 +1181,9 @@ namespace platf::dxgi {
     if (auto qpc_displayed = std::max(frame_info.LastPresentTime.QuadPart, frame_info.LastMouseUpdateTime.QuadPart)) {
       // Translate QueryPerformanceCounter() value to steady_clock time point
       frame_timestamp = std::chrono::steady_clock::now() - qpc_time_difference(qpc_counter(), qpc_displayed);
+    }
+    if (fork_pulse_frame) {
+      frame_timestamp = std::chrono::steady_clock::now();  // [fork]
     }
 
     if (frame_info.PointerShapeBufferSize > 0) {
@@ -1188,6 +1201,14 @@ namespace platf::dxgi {
 
       auto alpha_cursor_img = make_cursor_alpha_image(img_data, shape_info);
       auto xor_cursor_img = make_cursor_xor_image(img_data, shape_info);
+
+      // [fork] Kept for the pulse's tinted copy, with the hotspot it's drawn larger around
+      fork_cursor_alpha_img.assign(std::begin(alpha_cursor_img), std::end(alpha_cursor_img));
+      fork_cursor_alpha_pitch = 4 * shape_info.Width;
+      fork_cursor_hotspot = shape_info.HotSpot;
+      fork_pulse_res.reset();
+      fork_pulse_texture.reset();
+      fork_pulse_tint = -1;
 
       if (!set_cursor_texture(device.get(), cursor_alpha, std::move(alpha_cursor_img), shape_info) ||
           !set_cursor_texture(device.get(), cursor_xor, std::move(xor_cursor_img), shape_info)) {
@@ -1445,17 +1466,74 @@ namespace platf::dxgi {
         }
     }
 
+    // [fork] The cursor's image tinted for the pulse, on a texture of its own; false without one
+    auto fork_pulse_tinted = [&](float tint) -> bool {
+      if (fork_cursor_alpha_img.empty() || fork_cursor_alpha_pitch == 0 || !cursor_alpha.texture.get()) {
+        return false;
+      }
+      if (!fork_pulse_texture.get()) {
+        D3D11_TEXTURE2D_DESC t {};
+        t.Width = cursor_alpha.texture_width;
+        t.Height = cursor_alpha.texture_height;
+        t.MipLevels = 1;
+        t.ArraySize = 1;
+        t.SampleDesc.Count = 1;
+        t.Usage = D3D11_USAGE_DEFAULT;
+        t.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        t.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(device->CreateTexture2D(&t, nullptr, &fork_pulse_texture)) ||
+            FAILED(device->CreateShaderResourceView(fork_pulse_texture.get(), nullptr, &fork_pulse_res))) {
+          fork_pulse_res.reset();
+          fork_pulse_texture.reset();
+          return false;
+        }
+        fork_pulse_tint = -1;
+      }
+      if (fork_pulse_tint != tint) {
+        std::vector<std::uint8_t> tinted = fork_cursor_alpha_img;
+        fork_tweaks::cursor_pulse::tint_bgra(tinted.data(), tinted.size() / 4, tint);
+        device_ctx->UpdateSubresource(fork_pulse_texture.get(), 0, nullptr, tinted.data(), fork_cursor_alpha_pitch, 0);
+        fork_pulse_tint = tint;
+      }
+      return true;
+    };
+
     auto blend_cursor = [&](img_d3d_t &d3d_img) {
       device_ctx->VSSetShader(cursor_vs.get(), nullptr, 0);
       device_ctx->PSSetShader(cursor_ps.get(), nullptr, 0);
       device_ctx->OMSetRenderTargets(1, &d3d_img.capture_rt, nullptr);
 
+      // [fork] LuzLunar's cursor pulse: drawn larger around its hotspot, its light parts tinted
+      // (fork/cursor_pulse.h). The inverting part of a cursor, as a text cursor's, is only drawn larger.
+      const auto pulse = fork_tweaks::cursor_pulse::look();
+      auto fork_view = [&](const gpu_cursor_t &cursor) {
+        D3D11_VIEWPORT view = cursor.cursor_view;
+        if (pulse.scale != 1.f) {
+          int rotation = cursor.display_rotation == DXGI_MODE_ROTATION_ROTATE90  ? 1 :
+                         cursor.display_rotation == DXGI_MODE_ROTATION_ROTATE180 ? 2 :
+                         cursor.display_rotation == DXGI_MODE_ROTATION_ROTATE270 ? 3 :
+                                                                                   0;
+          auto [px, py] = fork_tweaks::cursor_pulse::hotspot_in_view(rotation, (float) fork_cursor_hotspot.x, (float) fork_cursor_hotspot.y, (float) cursor.texture_width, (float) cursor.texture_height);
+          auto scaled = fork_tweaks::cursor_pulse::scaled({view.TopLeftX, view.TopLeftY, view.Width, view.Height}, px, py, pulse.scale);
+          view.TopLeftX = scaled.x;
+          view.TopLeftY = scaled.y;
+          view.Width = scaled.w;
+          view.Height = scaled.h;
+        }
+        return view;
+      };
+
       if (cursor_alpha.texture.get()) {
         // Perform an alpha blending operation
         device_ctx->OMSetBlendState(blend_alpha.get(), nullptr, 0xFFFFFFFFu);
 
-        device_ctx->PSSetShaderResources(0, 1, &cursor_alpha.input_res);
-        device_ctx->RSSetViewports(1, &cursor_alpha.cursor_view);
+        ID3D11ShaderResourceView *alpha_res = cursor_alpha.input_res.get();
+        if (pulse.tint > 0.f && fork_pulse_tinted(pulse.tint)) {
+          alpha_res = fork_pulse_res.get();
+        }
+        auto alpha_view = fork_view(cursor_alpha);
+        device_ctx->PSSetShaderResources(0, 1, &alpha_res);
+        device_ctx->RSSetViewports(1, &alpha_view);
         device_ctx->Draw(3, 0);
       }
 
@@ -1463,8 +1541,9 @@ namespace platf::dxgi {
         // Perform an invert blending without touching alpha values
         device_ctx->OMSetBlendState(blend_invert.get(), nullptr, 0x00FFFFFFu);
 
+        auto xor_view = fork_view(cursor_xor);
         device_ctx->PSSetShaderResources(0, 1, &cursor_xor.input_res);
-        device_ctx->RSSetViewports(1, &cursor_xor.cursor_view);
+        device_ctx->RSSetViewports(1, &xor_view);
         device_ctx->Draw(3, 0);
       }
 
@@ -1636,6 +1715,8 @@ namespace platf::dxgi {
     device_ctx->PSSetSamplers(0, 1, &sampler_linear);
     device_ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
+    // [fork] Apollo draws the cursor here, so LuzLunar's pulse can be drawn on it
+    fork_tweaks::cursor_pulse::set_capable(true);
     return 0;
   }
 
@@ -1708,6 +1789,8 @@ namespace platf::dxgi {
       return -1;
     }
 
+    // [fork] Windows draws the cursor here: LuzLunar draws its pulse itself
+    fork_tweaks::cursor_pulse::set_capable(false);
     return 0;
   }
 

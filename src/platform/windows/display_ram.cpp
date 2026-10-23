@@ -5,6 +5,7 @@
 // local includes
 #include "display.h"
 #include "misc.h"
+#include "src/fork/cursor_pulse.h"  // [fork]
 #include "src/logging.h"
 
 namespace platf {
@@ -378,6 +379,8 @@ namespace platf::dxgi {
       return -1;
     }
 
+    // [fork] LuzLunar's cursor pulse is drawn on the GPU's copy only: LuzLunar draws it itself here
+    fork_tweaks::cursor_pulse::set_capable(false);
     return 0;
   }
 
