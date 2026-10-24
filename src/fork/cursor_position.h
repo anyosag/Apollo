@@ -8,7 +8,8 @@
  * the pointer by what it sends (Windows moves it a pixel a count then, pointer_speed.h) and, when
  * it's pushed up against the top of the display, asks here: only the PC knows for sure, as an app
  * may have moved the pointer since. The Mac's own pointer goes up into the bar only once this says
- * the pointer is at the top.
+ * the pointer is at the top. POST also pulses the pointer in the picture as it goes and comes back
+ * (cursor_pulse.h).
  */
 #pragma once
 
@@ -47,13 +48,21 @@ namespace fork_tweaks::cursor_position {
     return position_t {virtual_x - display.offset_x, virtual_y - display.offset_y, display.width, display.height, shown};
   }
 
-  inline std::string position_json(const position_t &position) {
+  /// At the top of the display, or above it on a display over it: where a push up leaves it
+  inline bool at_top(const position_t &position) {
+    return position.y <= 0 && position.x >= 0 && position.x < position.width;
+  }
+
+  /// can_pulse: the capture draws the cursor, so it can pulse; pulsing: this request started a pulse
+  inline std::string position_json(const position_t &position, bool can_pulse = false, bool pulsing = false) {
     return nlohmann::json {
       {"x", position.x},
       {"y", position.y},
       {"width", position.width},
       {"height", position.height},
       {"shown", position.shown},
+      {"canPulse", can_pulse},
+      {"pulsing", pulsing},
     }
       .dump();
   }
@@ -80,8 +89,10 @@ namespace fork_tweaks::cursor_position {
   bool supported();
 
   /**
-   * @brief GET /actions/cursor: {"x", "y", "width", "height", "shown"} for the client's own stream.
-   * 403 without one, 503 while Windows won't say (a secure desktop has the input).
+   * @brief GET /actions/cursor: {"x", "y", "width", "height", "shown", "canPulse", "pulsing"} for the
+   * client's own stream. POST {"pulse": N, "ifAtTop": bool, "reduceMotion": bool} answers the same
+   * and pulses the cursor N times (0: settles it back now); with ifAtTop, only while it's at the top.
+   * 403 without a stream, 503 while Windows won't say where the cursor is (a secure desktop has the input).
    */
-  reply_t handle(const client_t &client, const std::string &method);
+  reply_t handle(const client_t &client, const std::string &method, const std::string &body);
 }  // namespace fork_tweaks::cursor_position

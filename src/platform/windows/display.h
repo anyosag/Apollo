@@ -332,6 +332,15 @@ namespace platf::dxgi {
     gpu_cursor_t cursor_alpha;
     gpu_cursor_t cursor_xor;
 
+    // [fork] LuzLunar's cursor pulse (fork/cursor_pulse.h): the cursor's hotspot to draw it larger
+    // around, and its image for a tinted copy on a texture of its own
+    POINT fork_cursor_hotspot {};
+    std::vector<std::uint8_t> fork_cursor_alpha_img;
+    UINT fork_cursor_alpha_pitch = 0;
+    texture2d_t fork_pulse_texture;
+    shader_res_t fork_pulse_res;
+    float fork_pulse_tint = -1;  ///< the tint the pulse texture holds now; -1 before it holds one
+
     texture2d_t old_surface_delayed_destruction;
     std::chrono::steady_clock::time_point old_surface_timestamp;
     std::variant<std::monostate, texture2d_t, std::shared_ptr<platf::img_t>> last_frame_variant;

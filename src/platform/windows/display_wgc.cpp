@@ -16,6 +16,7 @@
 // local includes
 #include "display.h"
 #include "misc.h"
+#include "src/fork/cursor_pulse.h"  // [fork]
 #include "src/logging.h"
 
 namespace platf {
@@ -245,6 +246,8 @@ namespace platf::dxgi {
     }
 
     texture.reset();
+    // [fork] Windows draws the cursor here: LuzLunar draws its pulse itself
+    fork_tweaks::cursor_pulse::set_capable(false);
     return 0;
   }
 

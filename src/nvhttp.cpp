@@ -1917,7 +1917,7 @@ namespace nvhttp {
 
     auto named_cert_p = get_verified_cert(request);
     fork_tweaks::cursor_position::client_t client {named_cert_p->name, named_cert_p->uuid, !!(named_cert_p->perm & PERM::_allow_view)};
-    auto reply = fork_tweaks::cursor_position::handle(client, request->method);
+    auto reply = fork_tweaks::cursor_position::handle(client, request->method, request->content.string());
 
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "application/json");
@@ -2033,6 +2033,7 @@ namespace nvhttp {
     https_server.resource["^/actions/bitrate$"]["GET"] = forkBitrate;  // [fork]
     https_server.resource["^/actions/bitrate$"]["POST"] = forkBitrate;  // [fork]
     https_server.resource["^/actions/cursor$"]["GET"] = forkCursor;  // [fork]
+    https_server.resource["^/actions/cursor$"]["POST"] = forkCursor;  // [fork]
 
     https_server.config.reuse_address = true;
     https_server.config.address = net::af_to_any_address_string(address_family);

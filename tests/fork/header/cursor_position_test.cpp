@@ -44,11 +44,24 @@ static void test_json() {
   CHECK(json["width"] == 2560);
   CHECK(json["height"] == 1440);
   CHECK(json["shown"] == true);
+  CHECK(json["canPulse"] == false && json["pulsing"] == false);
+  auto pulsing = nlohmann::json::parse(position_json({400, 0, 2560, 1440, true}, true, true));
+  CHECK(pulsing["canPulse"] == true && pulsing["pulsing"] == true);
+}
+
+static void test_at_top() {
+  CHECK(at_top({400, 0, 2560, 1440, true}));
+  // Above, on a display over this one
+  CHECK(at_top({400, -30, 2560, 1440, true}));
+  CHECK(!at_top({400, 1, 2560, 1440, true}));
+  // Beside the display
+  CHECK(!at_top({-5, 0, 2560, 1440, true}) && !at_top({2560, 0, 2560, 1440, true}));
 }
 
 int main() {
   test_on_display();
   test_json();
+  test_at_top();
 
   if (s_Failures == 0) {
     std::printf("cursor_position: all tests passed\n");

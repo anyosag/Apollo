@@ -8,6 +8,7 @@
 
 // local includes
 #include "cursor_position.h"
+#include "cursor_pulse.h"
 #include "src/logging.h"
 // As adaptive_bitrate.cpp has them: network.h's Boost.Asio before rtsp.h's windows.h, which would
 // bring in WinSock 1 first
@@ -72,7 +73,7 @@ namespace fork_tweaks::cursor_position {
 #endif
   }
 
-  reply_t handle(const client_t &client, const std::string &method) {
+  reply_t handle(const client_t &client, const std::string &method, const std::string &body) {
     if (!client.permitted) {
       BOOST_LOG(debug) << "fork: cursor: client ["sv << client.name << "] may not view streams"sv;
       return error_reply(401, "permission");
@@ -80,12 +81,23 @@ namespace fork_tweaks::cursor_position {
     if (!supported()) {
       return error_reply(404, "unsupported");
     }
-    if (method != "GET") {
+    if (method != "GET" && method != "POST") {
       return error_reply(400, "method");
+    }
+    std::optional<cursor_pulse::request_t> pulse;
+    if (method == "POST") {
+      pulse = cursor_pulse::parse_request(body);
+      if (!pulse) {
+        return error_reply(400, "bad_request");
+      }
     }
     // Only the client's own stream, by its certificate
     if (!rtsp_stream::find_session(client.uuid)) {
       return error_reply(403, "not_streaming");
+    }
+    if (pulse && pulse->pulses == 0) {
+      // Settling back needs no position
+      cursor_pulse::start(*pulse);
     }
 
 #ifdef _WIN32
@@ -98,7 +110,13 @@ namespace fork_tweaks::cursor_position {
     if (!position) {
       return error_reply(503, "unavailable");
     }
-    return {200, position_json(*position)};
+    bool can_pulse = cursor_pulse::capable();
+    bool pulsing = false;
+    if (pulse && pulse->pulses > 0 && can_pulse && position->shown && (!pulse->if_at_top || at_top(*position))) {
+      cursor_pulse::start(*pulse);
+      pulsing = true;
+    }
+    return {200, position_json(*position, can_pulse, pulsing)};
 #else
     return error_reply(404, "unsupported");
 #endif
