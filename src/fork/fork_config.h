@@ -82,6 +82,16 @@ namespace fork_tweaks {
   /// than the stream's, for a driver that caps the frames the game renders rather than those it shows.
   inline bool smooth_motion_half_cap = false;
 
+  /// `fork_display_group`: the "Desktop (multiple displays)" app for LuzLunar: one virtual display
+  /// per Mac display, arranged like the Mac's, each streamed by its own session, with the PC's
+  /// displays off while it runs (display_group.h).
+  inline bool display_group_enabled = true;
+
+  /// `fork_pair_from_client`: a client with the "Pair other devices" permission can give Apollo the
+  /// PIN of another device waiting to pair at a given address (POST /actions/pairdevice), as
+  /// LuzLunar does for the iMac's Moonlight.
+  inline bool pair_from_client = true;
+
   /**
    * @brief Read the fork-only options and remove them from @p vars, so they aren't reported as unrecognized.
    * @param vars The parsed sunshine.conf options.

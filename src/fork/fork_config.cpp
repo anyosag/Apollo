@@ -72,5 +72,7 @@ namespace fork_tweaks {
     bool_option(vars, "fork_nv_stream_settings", nv_stream_settings);
     choice_option(vars, "fork_vdisplay_refresh_multiplier", {1, 2, 4}, vdisplay_refresh_multiplier);
     bool_option(vars, "fork_smooth_motion_half_cap", smooth_motion_half_cap);
+    bool_option(vars, "fork_display_group", display_group_enabled);
+    bool_option(vars, "fork_pair_from_client", pair_from_client);
   }
 }  // namespace fork_tweaks

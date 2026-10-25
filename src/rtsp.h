@@ -14,6 +14,7 @@
 // local includes
 #include "crypto.h"
 #include "fork/client_display.h"
+#include "fork/display_group_policy.h"  // [fork]
 #include "thread_safe.h"
 
 #ifdef _WIN32
@@ -75,6 +76,13 @@ namespace rtsp_stream {
     /// to leave room to raise it (fork/adaptive_bitrate.h); 0 from other clients
     std::int64_t luz_bitrate_kbps = 0;
 
+    /// [fork] "Desktop (multiple displays)" (fork/display_group.h): what the launch said about its
+    /// group, and the slot this stream takes; -1 outside a group
+    struct {
+      display_group_policy::request_t request;
+      int slot = -1;
+    } fork_group;
+
   #ifdef _WIN32
     GUID display_guid{};
   #endif
@@ -87,6 +95,9 @@ namespace rtsp_stream {
    * @param launch_session_id The ID of the session to clear.
    */
   void launch_session_clear(uint32_t launch_session_id);
+
+  /// [fork] A launch waits for its RTSP handshake; another would be dropped until it's done
+  bool launch_session_pending();
 
   /**
    * @brief Get the number of active sessions.

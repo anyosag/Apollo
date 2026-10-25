@@ -268,12 +268,13 @@
       list             = _action << 0,     // Allow list apps
       view             = _action << 1,     // Allow view streams
       launch           = _action << 2,     // Allow launch apps
+      client_pair      = _action << 3,     // [fork] Allow giving another device's PIN; not one of _all_actions
       _allow_view      = view | launch,    // Launch contains view permission
       _all_actions     = list | view | launch,
 
       _default         = view | list,      // Default permissions for new clients
       _no              = 0,                // No permissions are granted
-      _all             = _all_inputs | _all_opeiations | _all_actions, // All current permissions
+      _all             = _all_inputs | _all_opeiations | _all_actions | client_pair, // All current permissions
     };
   */
 
@@ -303,11 +304,12 @@
     launch: 0x04000000,
     _allow_view: 0x06000000,
     _all_actions: 0x07000000,
+    client_pair: 0x08000000,  // [fork]
 
     // Special permissions
     _default: 0x03000000,
     _no: 0x00000000,
-    _all: 0x07FF1F00
+    _all: 0x0FFF1F00  // [fork] with client_pair
   };
 
   const permissionGroups = [
@@ -343,6 +345,9 @@
         suppressed_by: []
       }, {
         name: 'host_sleep',  // [fork]
+        suppressed_by: []
+      }, {
+        name: 'client_pair',  // [fork]
         suppressed_by: []
       }
     ] },

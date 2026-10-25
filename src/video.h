@@ -52,6 +52,10 @@ namespace video {
 
     /// [fork] LuzLunar's bitrate changes while the stream runs (fork/adaptive_bitrate.h); null for none
     std::shared_ptr<fork_tweaks::adaptive_bitrate::live_t> fork_bitrate;
+
+    /// [fork] The display group slot this stream shows (fork/display_group.h): past 0, its own
+    /// display on a capture thread of its own; -1 outside a group
+    int fork_capture_slot = -1;
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);
@@ -378,4 +382,8 @@ namespace video {
    * @warning This is only safe to call when there is no client actively streaming.
    */
   int probe_encoders();
+
+  /// [fork] Whether the chosen encoder encodes several streams at once, each from its own capture
+  /// (fork/display_group.h)
+  bool fork_parallel_encoding();
 }  // namespace video

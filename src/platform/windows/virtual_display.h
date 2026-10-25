@@ -66,4 +66,15 @@ namespace VDISPLAY {
 	PRESENCE getVirtualDisplayPresence(const GUID& guid, std::wstring& name);
 	// [fork] Removes every display the driver has; returns how many
 	int removeAllVirtualDisplays();
+
+	// [fork] Where a display goes on the desktop
+	struct display_position_t {
+		std::wstring name;  // Its GDI name
+		int x;
+		int y;
+	};
+	// [fork] Places the displays in one SetDisplayConfig, for a display group (fork/display_group.h);
+	// the display at 0,0 becomes the primary one, and displays not named keep their places. Nothing
+	// changes when each is in its place already.
+	bool setDisplayPositions(const std::vector<display_position_t>& positions);
 }

@@ -62,5 +62,8 @@ namespace stream {
 
     /// [fork] How many sessions stream now, without taking any lock (fork/vdisplay_recovery.cpp)
     unsigned running_count();
+
+    /// [fork] The display group slot the session streams (fork/display_group.h); -1 outside a group
+    int fork_slot(const session_t &session);
   }  // namespace session
 }  // namespace stream
