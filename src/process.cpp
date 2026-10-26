@@ -333,8 +333,9 @@ namespace proc {
 
           // [fork] To Windows, the extended desktop's display is another one than the display this
           // client streams other apps to (which may be the only one on), so it keeps a layout of its
-          // own: where the display goes next to the PC's
-          if (extends_desktop()) {
+          // own: where the display goes next to the PC's. So is a display group's slot 0, whose
+          // identity the group's other slots mix their number into.
+          if (extends_desktop() || display_group_app()) {
             auto app_uuid = uuid_util::uuid_t::parse(_app.uuid);
             device_uuid.b64[0] ^= app_uuid.b64[0];
             device_uuid.b64[1] ^= app_uuid.b64[1];
@@ -347,12 +348,23 @@ namespace proc {
         _vdisplay_uuid = device_uuid_str;
         _vdisplay_client_name = device_name;
 
+        // [fork] A display group puts the displays on now back when it ends
+        if (display_group_app()) {
+          fork_tweaks::display_group::begin();
+        }
+
         // Don't change display settings when no params are given
         setup_virtual_display(vdisplay_target, launch_session->client_screen, launch_session->display_guid, launch_session->fps != 0);
 
         // No matter we get the display name or not, the virtual display might still be created.
         // We need to track it properly to remove the display when the session terminates.
         launch_session->virtual_display = true;
+
+        // [fork] A display group's other slots, a display each; configure_launch_display() arranges them
+        if (display_group_app() && this->virtual_display) {
+          auto &declaration = launch_session->fork_group.request.declaration;
+          fork_tweaks::display_group::create(declaration ? &*declaration : nullptr, display_group_lead());
+        }
       } else {
         // Driver isn't working so we don't need to track virtual display.
         launch_session->virtual_display = false;
@@ -566,6 +578,16 @@ namespace proc {
   // displays on and the primary display where it is, and with no virtual display to configure
   // leaves the displays alone: display_device would otherwise configure the primary one.
   void proc_t::configure_launch_display(const rtsp_stream::launch_session_t &session) {
+    // [fork] A display group arranges its own displays, which are the only ones on
+    if (display_group_app()) {
+      if (virtual_display) {
+        arrange_display_group();
+      } else {
+        BOOST_LOG(warning) << "fork: display group: no virtual display, the displays are left as they are"sv;
+      }
+      return;
+    }
+
     // [fork] display_device::configure_display(), but the virtual display keeps running at a multiple
     // of the stream's rate, which the automatic refresh rate would set it back to. A rate the user
     // set (a manual one, or a remapping) stays theirs, and so does any rate while display_device
@@ -682,8 +704,9 @@ namespace proc {
                     << (_vdisplay_stream_mhz ? running.refresh_mhz / (double) _vdisplay_stream_mhz : 1.0) << "x the stream's"sv;
 
     // Check the ISOLATED DISPLAY configuration setting and rearrange the displays
-    // [fork] Not for an extended desktop, which the mouse is meant to cross into
-    if (config::video.isolated_virtual_display_option == true && !extend_from) {
+    // [fork] Not for an extended desktop, which the mouse is meant to cross into, or a display group,
+    // which arranges its displays itself
+    if (config::video.isolated_virtual_display_option == true && !extend_from && !display_group_app()) {
       // Apply the isolated display settings
       VDISPLAY::changeDisplaySettings2(vdisplayName.c_str(), running.width, running.height, running.refresh_mhz, true);
     }
@@ -856,6 +879,12 @@ namespace proc {
       result = vdisplay_change_e::mode_changed;
     }
 
+    // [fork] A display group's displays go in their places again around slot 0's new size (a
+    // re-created display was arranged by configure_launch_display() already)
+    if (result == vdisplay_change_e::mode_changed && display_group_app()) {
+      arrange_display_group();
+    }
+
     if (result == vdisplay_change_e::mode_changed || result == vdisplay_change_e::replugged) {
       // A display keeps its HDR state through a mode change (LuzVDA's first test and the stream
       // test's resumes), so HDR is set again only when it should change or the display is new
@@ -934,6 +963,12 @@ namespace proc {
       return false;
     }
 
+    // [fork] A display group's displays again, only they on
+    if (display_group_app()) {
+      arrange_display_group();
+      return true;
+    }
+
     // The launch's display configuration again (e.g. this display only); without one, or for the
     // extended desktop, the display goes next to whatever is on, and nothing is switched off
     if (extends_desktop() || !display_configured()) {
@@ -993,7 +1028,7 @@ namespace proc {
     int width = 0;
     int height = 0;
     int refresh_mhz = 0;
-    if (config::video.isolated_virtual_display_option && !extends_desktop() && VDISPLAY::getDisplayMode(nameW.c_str(), width, height, refresh_mhz)) {
+    if (config::video.isolated_virtual_display_option && !extends_desktop() && !display_group_app() && VDISPLAY::getDisplayMode(nameW.c_str(), width, height, refresh_mhz)) {
       VDISPLAY::changeDisplaySettings2(nameW.c_str(), width, height, refresh_mhz, true);
     }
 
@@ -1021,7 +1056,64 @@ namespace proc {
     // for whoever stops it
     _vdisplay_recovery.reset();
   }
+
+  // [fork] fork/display_group.h
+  fork_tweaks::display_group::lead_t proc_t::display_group_lead() const {
+    fork_tweaks::display_group::lead_t lead;
+    if (_launch_session) {
+      std::memcpy(lead.guid.data(), &_launch_session->display_guid, lead.guid.size());
+    }
+    lead.display = _vdisplay_name;
+    lead.mode = _vdisplay_mode;
+    lead.multiplier = _vdisplay_multiplier;
+    lead.device_name = _vdisplay_client_name;
+    return lead;
+  }
+
+  void proc_t::arrange_display_group() {
+    auto name = fork_tweaks::display_group::arrange(display_group_lead());
+    if (!name.empty() && name != _vdisplay_name) {
+      virtual_display_back(name, false);
+    }
+  }
 #endif
+
+  // [fork] fork/display_group.h
+  bool proc_t::display_group_app() const {
+    return _app.uuid == DISPLAY_GROUP_UUID;
+  }
+
+  int proc_t::lead_display_group(const display_group_policy::declaration_t &declaration, bool streaming) {
+#ifdef _WIN32
+    // Not while the recovery monitor brings slot 0's display back
+    std::lock_guard vdisplay_lock {vdisplay_mutex()};
+    // Without its displays, slot 0 streams alone; the other slots find no slot to join
+    if (!display_group_app() || !virtual_display || !fork_tweaks::display_group::active()) {
+      BOOST_LOG(warning) << "fork: display group: the app runs without its displays, so slot 0 streams alone"sv;
+      return 200;
+    }
+
+    auto running = fork_tweaks::display_group::declaration();
+    switch (display_group_policy::lead_action(running ? &*running : nullptr, declaration, streaming)) {
+      case display_group_policy::lead_e::adopt:
+        // Arranged again too, which changes nothing unless Windows moved or switched off a display
+        fork_tweaks::display_group::adopt(declaration.id);
+        arrange_display_group();
+        return 200;
+      case display_group_policy::lead_e::conflict:
+        BOOST_LOG(warning) << "fork: display group: slot 0 declares another layout while the group streams"sv;
+        return 409;
+      case display_group_policy::lead_e::rebuild:
+        fork_tweaks::display_group::rebuild(declaration, display_group_lead());
+        arrange_display_group();
+        display_device::reset_persistence();
+        return 200;
+    }
+    return 503;
+#else
+    return 200;
+#endif
+  }
 
   std::string proc_t::stream_display() {
     std::lock_guard lock {display_name_mutex()};
@@ -1236,6 +1328,11 @@ namespace proc {
       } else {
         BOOST_LOG(info) << "HDR revert failed for display " << mode_changed_display;
       }
+    }
+
+    // [fork] A display group's other displays go, and the PC's displays come back as they were
+    if (display_group_app()) {
+      fork_tweaks::display_group::end();
     }
 
     bool used_virtual_display = vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK && _launch_session && _launch_session->virtual_display;
@@ -1970,6 +2067,37 @@ namespace proc {
       }
       else {
         // Fallback to include index on collision
+        ctx.id = std::get<1>(possible_ids);
+      }
+      ids.insert(ctx.id);
+
+      apps.emplace_back(std::move(ctx));
+    }
+
+    // [fork] "Desktop (multiple displays)" for LuzLunar: one virtual display per Mac display
+    // (fork/display_group.h). It keeps running between streams, as Desktop does.
+    if (vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK && fork_tweaks::display_group_enabled) {
+      proc::ctx_t ctx;
+      ctx.idx = std::to_string(i);
+      ctx.uuid = DISPLAY_GROUP_UUID;
+      ctx.name = "Desktop (multiple displays)";
+      ctx.image_path = parse_env_val(this_env, "desktop.png");
+      ctx.virtual_display = true;
+      ctx.scale_factor = 100;
+      ctx.use_app_identity = false;
+      ctx.per_client_app_identity = false;
+      ctx.allow_client_commands = false;
+      ctx.terminate_on_pause = false;
+
+      ctx.elevated = false;
+      ctx.auto_detach = true;
+      ctx.wait_all = false;
+      ctx.exit_timeout = 5s;
+
+      auto possible_ids = calculate_app_id(ctx.name, ctx.image_path, i++);
+      if (ids.count(std::get<0>(possible_ids)) == 0) {
+        ctx.id = std::get<0>(possible_ids);
+      } else {
         ctx.id = std::get<1>(possible_ids);
       }
       ids.insert(ctx.id);

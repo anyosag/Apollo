@@ -29,6 +29,7 @@
 // local includes
 #include "config.h"
 #include "fork/client_display.h"
+#include "fork/display_group.h"  // [fork]
 #include "fork/vdisplay_mode.h"
 #include "fork/vdisplay_recovery.h"
 #include "platform/common.h"
@@ -43,6 +44,8 @@
 #define FALLBACK_DESKTOP_UUID "EAAC6159-089A-46A9-9E24-6436885F6610"
 #define REMOTE_INPUT_UUID "8CB5C136-DA67-4F99-B4A1-F9CD35005CF4"
 #define TERMINATE_APP_UUID "E16CBE1B-295D-4632-9A76-EC4180C857D3"
+// [fork] "Desktop (multiple displays)" for LuzLunar (fork/display_group.h)
+#define DISPLAY_GROUP_UUID "5B1E7C3A-2D84-4F69-9C0B-7A3E1F6D2C58"
 
 namespace proc {
   using file_t = util::safe_ptr_v2<FILE, int, fclose>;
@@ -154,6 +157,16 @@ namespace proc {
      */
     void capture_moved(const std::string &display, bool chosen);
 
+    /// [fork] The app is "Desktop (multiple displays)", whose displays fork/display_group.h arranges
+    bool display_group_app() const;
+
+    /**
+     * @brief [fork] Slot 0's launch or resume of the running display group: the same layout takes
+     * the declaration's new id, another makes the other slots' displays again while nobody streams.
+     * @return 200, 409 (another layout while someone streams) or 503.
+     */
+    int lead_display_group(const display_group_policy::declaration_t &declaration, bool streaming);
+
 #ifdef _WIN32
     /// [fork] What reconfigure_virtual_display() did
     enum class vdisplay_change_e {
@@ -252,6 +265,11 @@ namespace proc {
 
     void start_vdisplay_recovery();
     void stop_vdisplay_recovery();
+
+    /// [fork] Slot 0 of a display group: this app's own display
+    fork_tweaks::display_group::lead_t display_group_lead() const;
+    /// [fork] Only the group's displays on, each in its place; follows slot 0's display if it's renamed
+    void arrange_display_group();
 #endif
   };
 

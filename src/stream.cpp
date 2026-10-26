@@ -24,6 +24,7 @@ extern "C" {
 #include "control_packet.h"
 #include "crypto.h"
 #include "display_device.h"
+#include "fork/display_group.h"  // [fork]
 #include "fork/fork_config.h"
 #include "fork/frame_loss.h"
 #include "fork/luztouchpad.h"
@@ -2000,6 +2001,10 @@ namespace stream {
       return running_sessions.load();
     }
 
+    int fork_slot(const session_t &session) {
+      return session.config.monitor.fork_capture_slot;
+    }
+
     state_e state(session_t &session) {
       return session.state.load(std::memory_order_relaxed);
     }
@@ -2018,6 +2023,10 @@ namespace stream {
 
     bool update_device_info(session_t& session, const std::string& name, const crypto::PERM& newPerm) {
       session.permission = newPerm;
+      // [fork] A display group's slot past 0 stays video only
+      if (fork_slot(session) >= 1) {
+        session.permission = fork_tweaks::display_group::slot_permission(newPerm);
+      }
       if (!(newPerm & crypto::PERM::_allow_view)) {
         BOOST_LOG(debug) << "Session: View permission revoked for [" << session.device_name << "], disconnecting...";
         graceful_stop(session);
@@ -2100,8 +2109,12 @@ namespace stream {
       BOOST_LOG(debug) << "Waiting for control to end..."sv;
       session.controlEnd.view();
       // Reset input on session stop to avoid stuck repeated keys
-      BOOST_LOG(debug) << "Resetting Input..."sv;
-      input::reset(session.input);
+      // [fork] Not for a display group's slot past 0: it sends no input, and the reset would let go of
+      // the keys and buttons slot 0 holds
+      if (fork_slot(session) < 1) {
+        BOOST_LOG(debug) << "Resetting Input..."sv;
+        input::reset(session.input);
+      }
 
       if (!session.undo_cmds.empty()) {
         auto exec_thread = std::thread([cmd_list = session.undo_cmds]{
@@ -2120,6 +2133,12 @@ namespace stream {
         });
 
         exec_thread.detach();
+      }
+
+      // [fork] The session's display group slot is free again; when slot 0's stream ends, the
+      // other slots' end with it (fork/display_group.h)
+      if (fork_slot(session) >= 0) {
+        fork_tweaks::display_group::release(fork_slot(session), session.launch_session_id);
       }
 
       // If this is the last session, invoke the platform callbacks

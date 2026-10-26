@@ -23,6 +23,7 @@ extern "C" {
 
 // local includes
 #include "config.h"
+#include "fork/display_group.h"  // [fork]
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -620,13 +621,21 @@ namespace rtsp_stream {
     find_session(const std::string_view& uuid) {
       auto lg = _session_slots.lock();
 
+      // [fork] A display group's slot 0 before the device's other slots: it has the input and is
+      // the one stream the client's requests are about (fork/display_group.h)
+      std::shared_ptr<stream::session_t> other_slot;
       for (auto &slot : *_session_slots) {
         if (slot && stream::session::uuid_match(*slot, uuid)) {
-          return slot;
+          if (stream::session::fork_slot(*slot) < 1) {
+            return slot;
+          }
+          if (!other_slot) {
+            other_slot = slot;
+          }
         }
       }
 
-      return nullptr;
+      return other_slot;
     }
 
     std::list<std::string>
@@ -661,6 +670,10 @@ namespace rtsp_stream {
 
   void launch_session_clear(uint32_t launch_session_id) {
     server.session_clear(launch_session_id);
+  }
+
+  bool launch_session_pending() {
+    return (bool) server.launch_event.view(0s);
   }
 
   int session_count() {
@@ -1187,13 +1200,32 @@ namespace rtsp_stream {
       return;
     }
 
+    // [fork] A display group's slot: its own display to capture, and video only past slot 0
+    // (fork/display_group.h)
+    auto fork_slot = session.fork_group.slot;
+    if (fork_slot >= 0) {
+      config.monitor.fork_capture_slot = fork_slot;
+      if (fork_slot >= 1) {
+        config.audio.input_only = true;
+      }
+    }
+
     auto stream_session = stream::session::alloc(config, session);
+    if (fork_slot >= 0 && !fork_tweaks::display_group::claim(fork_slot, session, stream_session)) {
+      // The launch isn't pending any more, so the next one needn't wait for it to time out
+      server->session_clear(session.id);
+      respond(sock, session, &option, 503, "Service Unavailable", req->sequenceNumber, {});
+      return;
+    }
     server->insert(stream_session);
 
     if (stream::session::start(*stream_session, sock.remote_endpoint().address().to_string())) {
       BOOST_LOG(error) << "Failed to start a streaming session"sv;
 
       server->remove(stream_session);
+      if (fork_slot >= 0) {
+        fork_tweaks::display_group::release(fork_slot, session.id);  // [fork]
+      }
       respond(sock, session, &option, 500, "Internal Server Error", req->sequenceNumber, {});
       return;
     }

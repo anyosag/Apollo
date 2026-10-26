@@ -128,6 +128,9 @@ namespace nvhttp {
      * @brief used as a security measure to prevent out of order calls
      */
     PAIR_PHASE last_phase = PAIR_PHASE::NONE;
+
+    /// [fork] The address the device pairs from, for POST /actions/pairdevice
+    std::string address;
   };
 
   /**

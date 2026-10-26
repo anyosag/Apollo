@@ -31,6 +31,8 @@
 #include "fork/clipboard_bundle.h"  // [fork]
 #include "fork/clipboard_files.h"  // [fork]
 #include "fork/cursor_position.h"  // [fork]
+#include "fork/display_group.h"  // [fork]
+#include "fork/fork_config.h"  // [fork]
 #include "fork/host_sleep.h"  // [fork]
 #include "fork/mac_drive.h"  // [fork]
 #include "fork/touch_emulation.h"  // [fork]
@@ -164,6 +166,10 @@ namespace nvhttp {
 
   // uniqueID, session
   std::unordered_map<std::string, pair_session_t> map_id_sess;
+
+  /// [fork] map_id_sess is used by the HTTP and HTTPS servers' threads, the Web UI's (pin()) and,
+  /// through POST /actions/pairdevice, a paired client's
+  std::mutex pair_mutex;
 
   /**
    * @brief Drops pairing sessions older than pair_session_timeout, so abandoned ones don't pile up or
@@ -372,7 +378,8 @@ namespace nvhttp {
         named_cert_p->uuid = el.value("uuid", "");
         named_cert_p->display_mode = el.value("display_mode", "");
         named_cert_p->perm = (PERM)(util::get_non_string_json_value<uint32_t>(el, "perm", (uint32_t)PERM::_all)) & PERM::_all;
-        if (named_cert_p->perm == PERM::_all_before_host_update || named_cert_p->perm == PERM::_all_before_client_drive || named_cert_p->perm == PERM::_all_before_host_sleep) {
+        if (named_cert_p->perm == PERM::_all_before_host_update || named_cert_p->perm == PERM::_all_before_client_drive || named_cert_p->perm == PERM::_all_before_host_sleep ||
+            named_cert_p->perm == PERM::_all_before_client_pair) {
           named_cert_p->perm = PERM::_all;  // [fork] a client with every permission keeps every permission
         }
         named_cert_p->enable_legacy_ordering = el.value("enable_legacy_ordering", true);
@@ -442,8 +449,22 @@ namespace nvhttp {
       std::copy(prepend_iv_p, prepend_iv_p + sizeof(prepend_iv), std::begin(launch_session->iv));
     }
 
+    // [fork] A launch argument, if the client sent it (luz* arguments are LuzLunar's)
+    auto fork_arg = [&args](std::string_view key) -> std::optional<std::string> {
+      auto it = args.find(std::string(key));
+      if (it == args.end()) {
+        return std::nullopt;
+      }
+      return it->second;
+    };
+
+    // [fork] What it says about a display group (fork/display_group.h): a slot past 0 streams its
+    // Mac display's mode, not the device's display mode override
+    launch_session->fork_group.request = display_group_policy::parse_request(fork_arg);
+    bool fork_group_join = launch_session->fork_group.request.kind == display_group_policy::request_t::kind_e::join;
+
     std::stringstream mode;
-    if (named_cert_p->display_mode.empty()) {
+    if (named_cert_p->display_mode.empty() || fork_group_join) {
       auto mode_str = get_arg(args, "mode", config::video.fallback_mode.c_str());
       mode = std::stringstream(mode_str);
       BOOST_LOG(info) << "Display mode for client ["sv << named_cert_p->name <<"] requested to ["sv << mode_str << ']';
@@ -498,13 +519,7 @@ namespace nvhttp {
     launch_session->scale_factor = util::from_view(get_arg(args, "scaleFactor", "100"));
 
     // [fork] The screen LuzLunar streams to, which the virtual display then describes
-    launch_session->client_screen = client_display::parse([&args](std::string_view key) -> std::optional<std::string> {
-      auto it = args.find(std::string(key));
-      if (it == args.end()) {
-        return std::nullopt;
-      }
-      return it->second;
-    });
+    launch_session->client_screen = client_display::parse(fork_arg);
     if (launch_session->client_screen) {
       BOOST_LOG(info) << "Client ["sv << launch_session->device_name << "] streams to "sv << client_display::summary(*launch_session->client_screen);
     }
@@ -792,6 +807,9 @@ namespace nvhttp {
       return;
     }
 
+    // [fork] Pairing sessions are shared with the other server's thread and /actions/pairdevice
+    std::lock_guard pair_lock {pair_mutex};
+
     auto uniqID {get_arg(args, "uniqueid")};
 
     args_t::const_iterator it;
@@ -810,6 +828,7 @@ namespace nvhttp {
         sess.client.uniqueID = std::move(uniqID);
         sess.client.name = std::move(deviceName);
         sess.client.cert = util::from_hex_vec(get_arg(args, "clientcert"), true);
+        sess.address = net::addr_to_normalized_string(request->remote_endpoint().address());  // [fork]
 
         BOOST_LOG(debug) << sess.client.cert;
         auto ptr = map_id_sess.emplace(sess.client.uniqueID, std::move(sess)).first;
@@ -903,8 +922,69 @@ namespace nvhttp {
     }
   }
 
+  /// [fork] A device waiting for its PIN; pin() and pin_at_address() answer its request
+  static bool waits_for_pin(const pair_session_t &sess) {
+    auto &response = sess.async_insert_pin.response;
+    return (response.has_left() && response.left()) || (response.has_right() && response.right());
+  }
+
+  /// [fork] pin()'s answer to the device waiting for the PIN, with pair_mutex held
+  static bool answer_pin(pair_session_t &sess, const std::string &pin, const std::string &name) {
+    pt::ptree tree;
+    getservercert(sess, tree, pin);
+
+    if (!name.empty()) {
+      sess.client.name = name;
+    }
+
+    // response to the request for pin
+    std::ostringstream data;
+    pt::write_xml(data, tree);
+
+    auto &async_response = sess.async_insert_pin.response;
+    if (async_response.has_left() && async_response.left()) {
+      async_response.left()->write(data.str());
+    } else if (async_response.has_right() && async_response.right()) {
+      async_response.right()->write(data.str());
+    } else {
+      return false;
+    }
+
+    // reset async_response
+    async_response = std::decay_t<decltype(async_response.left())>();
+    // response to the current request
+    return true;
+  }
+
+  /**
+   * @brief [fork] Gives @p pin to the one device waiting for a PIN at @p address, for POST
+   * /actions/pairdevice. pin() refuses while several devices wait anywhere; this needs only one at
+   * the address.
+   * @param waiting Set to every waiting device's address.
+   * @param at_address Set to how many wait at @p address.
+   */
+  static bool pin_at_address(const std::string &pin, const std::string &name, const std::string &address, std::vector<std::string> &waiting, std::size_t &at_address) {
+    std::lock_guard pair_lock {pair_mutex};
+    expire_pair_sessions();
+
+    std::vector<pair_session_t *> sessions;
+    for (auto &[id, sess] : map_id_sess) {
+      if (waits_for_pin(sess)) {
+        sessions.push_back(&sess);
+        waiting.push_back(sess.address);
+      }
+    }
+    auto match = display_group_policy::waiting_at(waiting, address);
+    at_address = match.count;
+    if (!match.index) {
+      return false;
+    }
+    return answer_pin(*sessions[*match.index], pin, name);
+  }
+
   bool pin(std::string pin, std::string name) {
     pt::ptree tree;
+    std::lock_guard pair_lock {pair_mutex};  // [fork]
     expire_pair_sessions();
 
     // The PIN goes to the one device waiting for it. With several waiting, there's no telling which
@@ -945,30 +1025,7 @@ namespace nvhttp {
       return false;
     }
 
-    auto &sess = *waiting;
-    getservercert(sess, tree, pin);
-
-    if (!name.empty()) {
-      sess.client.name = name;
-    }
-
-    // response to the request for pin
-    std::ostringstream data;
-    pt::write_xml(data, tree);
-
-    auto &async_response = sess.async_insert_pin.response;
-    if (async_response.has_left() && async_response.left()) {
-      async_response.left()->write(data.str());
-    } else if (async_response.has_right() && async_response.right()) {
-      async_response.right()->write(data.str());
-    } else {
-      return false;
-    }
-
-    // reset async_response
-    async_response = std::decay_t<decltype(async_response.left())>();
-    // response to the current request
-    return true;
+    return answer_pin(*waiting, pin, name);  // [fork] shared with pin_at_address()
   }
 
   template<class T>
@@ -1030,6 +1087,9 @@ namespace nvhttp {
       tree.put("root.LuzBitrate", fork_tweaks::adaptive_bitrate::supported() ? 1 : 0);  // [fork] /actions/bitrate works
       tree.put("root.LuzBitrateStart", fork_tweaks::adaptive_bitrate::supported() ? 1 : 0);  // [fork] and the stream starts at luzBitrate
       tree.put("root.LuzCursor", fork_tweaks::cursor_position::supported() ? 1 : 0);  // [fork] /actions/cursor works
+      tree.put("root.LuzDisplayGroup", fork_tweaks::display_group::max_slots());  // [fork] "Desktop (multiple displays)" runs, with up to this many slots
+      tree.put("root.LuzDisplayGroupApp", fork_tweaks::display_group::app_id());  // [fork] its app id
+      tree.put("root.LuzPairDevice", fork_tweaks::pair_from_client ? 1 : 0);  // [fork] /actions/pairdevice works
       tree.put("root.VirtualDisplayCapable", true);
       if (!!(named_cert_p->perm & PERM::_all_actions)) {
         tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK);
@@ -1278,6 +1338,79 @@ namespace nvhttp {
   }
 #endif
 
+  /**
+   * @brief [fork] Seats a launch or resume of "Desktop (multiple displays)" in its group
+   * (fork/display_group.h): slot 0 with LuzLunar's declaration, another slot by luzGroupId and
+   * luzSlot, or the first free external slot for a client without them, such as the iMac's stock
+   * Moonlight. A slot past 0 is video only: no input, audio or client commands.
+   * @param running Whether the app runs already.
+   * @param streaming Whether anyone streams now.
+   * @return false after filling in the error response.
+   */
+  static bool seat_in_display_group(rtsp_stream::launch_session_t &launch_session, bool running, bool streaming, pt::ptree &tree) {
+    using kind_e = display_group_policy::request_t::kind_e;
+    auto refuse = [&](int status, const std::string &message) {
+      BOOST_LOG(info) << "fork: display group: client ["sv << launch_session.device_name << "] refused with "sv << status << ": "sv << message;
+      tree.put("root.resume", 0);
+      tree.put("root.gamesession", 0);
+      tree.put("root.<xmlattr>.status_code", status);
+      tree.put("root.<xmlattr>.status_message", message);
+      return false;
+    };
+
+    auto &request = launch_session.fork_group.request;
+
+    // One launch waits for its RTSP handshake at a time; another would be dropped silently
+    if (rtsp_stream::launch_session_pending()) {
+      return refuse(503, "Another stream is starting, try again");
+    }
+    if (request.bad()) {
+      return refuse(400, "Bad display group: " + request.error);
+    }
+
+    if (request.kind == kind_e::lead) {
+      // Declaring the group changes it for everyone: not for a client that may only view
+      if (running && !(launch_session.perm & PERM::launch)) {
+        return refuse(403, "Permission denied");
+      }
+      if (!fork_tweaks::display_group::max_slots()) {
+        BOOST_LOG(warning) << "fork: display group: this host can't run display groups now, so slot 0 streams alone"sv;
+        request.declaration.reset();
+      } else if (running) {
+        auto status = proc::proc.lead_display_group(*request.declaration, streaming);
+        if (status != 200) {
+          return refuse(status, status == 409 ? "The display group streams with another layout" : "Couldn't set up the display group");
+        }
+      }
+      launch_session.fork_group.slot = 0;
+      return true;
+    }
+
+    if (!running) {
+      if (request.kind == kind_e::join) {
+        return refuse(410, "There's no such display group");
+      }
+      // Launched without a declaration: slot 0 alone
+      launch_session.fork_group.slot = 0;
+      return true;
+    }
+
+    auto group = fork_tweaks::display_group::view();
+    auto join = display_group_policy::check_join(group ? &*group : nullptr, request, launch_session.unique_id);
+    if (join.status != 200) {
+      return refuse(join.status, join.why);
+    }
+    launch_session.fork_group.slot = join.slot;
+    if (join.slot >= 1) {
+      // The main stream has the input, the audio and the commands
+      launch_session.perm = fork_tweaks::display_group::slot_permission(launch_session.perm);
+      launch_session.client_do_cmds.clear();
+      launch_session.client_undo_cmds.clear();
+      BOOST_LOG(info) << "fork: display group: client ["sv << launch_session.device_name << "] joins as slot "sv << join.slot;
+    }
+    return true;
+  }
+
   void launch(bool &host_audio, resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
@@ -1367,9 +1500,11 @@ namespace nvhttp {
           || (!appuuid_str.empty() && appuuid_str != current_app_uuid)
         )
       ) {
+        // [fork] A display group slot's join finds its group gone (fork/display_group.h)
+        bool fork_group_join = args.find("luzGroupId"s) != std::end(args);
         tree.put("root.resume", 0);
-        tree.put("root.<xmlattr>.status_code", 400);
-        tree.put("root.<xmlattr>.status_message", "An app is already running on this host");
+        tree.put("root.<xmlattr>.status_code", fork_group_join ? 410 : 400);
+        tree.put("root.<xmlattr>.status_message", fork_group_join ? "There's no such display group" : "An app is already running on this host");
 
         return;
       }
@@ -1392,6 +1527,14 @@ namespace nvhttp {
     }
 
     bool no_active_sessions = rtsp_stream::session_count() == 0;
+
+    // [fork] "Desktop (multiple displays)": the slot of its group this stream takes (fork/display_group.h)
+    if (!is_input_only && fork_tweaks::display_group::is_app(appid_str, appuuid_str)) {
+      bool running = current_appid > 0 && current_app_uuid == DISPLAY_GROUP_UUID;
+      if (!seat_in_display_group(*launch_session, running, !no_active_sessions, tree)) {
+        return;
+      }
+    }
 
     if (is_input_only) {
       BOOST_LOG(info) << "Launching input only session..."sv;
@@ -1433,7 +1576,8 @@ namespace nvhttp {
           }
         }
 #ifdef _WIN32
-        else if (!reconfigure_virtual_display(no_active_sessions, *launch_session, tree)) {
+        // [fork] Not for a display group's slot past 0, which has its own display
+        else if (launch_session->fork_group.slot < 1 && !reconfigure_virtual_display(no_active_sessions, *launch_session, tree)) {
           return;
         }
 #endif
@@ -1515,9 +1659,11 @@ namespace nvhttp {
 
     auto current_appid = proc::proc.running();
     if (current_appid == 0) {
+      // [fork] A display group slot's join finds its group gone; 503 would have it try again
+      bool fork_group_join = request->parse_query_string().count("luzGroupId"s) > 0;
       tree.put("root.resume", 0);
-      tree.put("root.<xmlattr>.status_code", 503);
-      tree.put("root.<xmlattr>.status_message", "No running app to resume");
+      tree.put("root.<xmlattr>.status_code", fork_group_join ? 410 : 503);
+      tree.put("root.<xmlattr>.status_message", fork_group_join ? "There's no such display group" : "No running app to resume");
 
       return;
     }
@@ -1552,6 +1698,20 @@ namespace nvhttp {
     launch_session->client_address = net::addr_to_normalized_string(request->remote_endpoint().address());
     launch_session->moonlight_ios = from_moonlight_ios(request, launch_session->device_name);  // [fork]
 
+    // [fork] "Desktop (multiple displays)": the slot of its group this stream takes; a join finds its
+    // group gone while another app runs (fork/display_group.h)
+    if (proc::proc.display_group_app()) {
+      if (!seat_in_display_group(*launch_session, true, !no_active_sessions, tree)) {
+        return;
+      }
+    } else if (launch_session->fork_group.request.kind == display_group_policy::request_t::kind_e::join) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 410);
+      tree.put("root.<xmlattr>.status_message", "There's no such display group");
+
+      return;
+    }
+
     if (!proc::proc.allow_client_commands || !named_cert_p->allow_client_commands) {
       launch_session->client_do_cmds.clear();
       launch_session->client_undo_cmds.clear();
@@ -1580,7 +1740,8 @@ namespace nvhttp {
       }
     }
 #ifdef _WIN32
-    else if (!reconfigure_virtual_display(no_active_sessions, *launch_session, tree)) {
+    // [fork] Not for a display group's slot past 0, which has its own display
+    else if (launch_session->fork_group.slot < 1 && !reconfigure_virtual_display(no_active_sessions, *launch_session, tree)) {
       return;
     }
 #endif
@@ -1924,6 +2085,75 @@ namespace nvhttp {
     response->write(static_cast<SimpleWeb::StatusCode>(reply.status), reply.body, headers);
   }
 
+  /**
+   * @brief [fork] GET /actions/displaygroup: the running display group's slots past 0, where each
+   * display is and which client streams it (fork/display_group.h). Needs View or Launch.
+   */
+  void forkDisplayGroup(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    if (!fork_tweaks::display_group_enabled) {
+      response->write(SimpleWeb::StatusCode::client_error_not_found, R"({"error":"disabled"})", headers);
+      return;
+    }
+    auto named_cert_p = get_verified_cert(request);
+    if (!(named_cert_p->perm & PERM::_allow_view)) {
+      response->write(SimpleWeb::StatusCode::client_error_unauthorized, R"({"error":"permission"})", headers);
+      return;
+    }
+    response->write(SimpleWeb::StatusCode::success_ok, fork_tweaks::display_group::status_json(), headers);
+  }
+
+  /**
+   * @brief [fork] POST /actions/pairdevice {"pin", "name", "address"}: the PIN for the device waiting
+   * to pair from that address, as LuzLunar gives it for the iMac's Moonlight. Needs the "Pair other
+   * devices" permission; the new device gets the default permissions (view and list).
+   */
+  void forkPairDevice(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    if (!fork_tweaks::pair_from_client) {
+      response->write(SimpleWeb::StatusCode::client_error_not_found, R"({"error":"disabled"})", headers);
+      return;
+    }
+    auto named_cert_p = get_verified_cert(request);
+    if (!(named_cert_p->perm & PERM::client_pair)) {
+      BOOST_LOG(debug) << "Permission Pair Device denied for [" << named_cert_p->name << "] (" << (uint32_t) named_cert_p->perm << ")";
+      response->write(SimpleWeb::StatusCode::client_error_forbidden, R"({"error":"permission"})", headers);
+      return;
+    }
+
+    std::string error;
+    auto body = display_group_policy::parse_pair_request(request->content.string(), error);
+    boost::system::error_code ec;
+    auto address = body ? boost::asio::ip::make_address(body->address, ec) : boost::asio::ip::address {};
+    if (body && ec) {
+      body.reset();
+      error = "invalid address";
+    }
+    if (!body) {
+      response->write(SimpleWeb::StatusCode::client_error_bad_request, nlohmann::json {{"error", error}}.dump(), headers);
+      return;
+    }
+
+    auto at = net::addr_to_normalized_string(address);
+    auto name = client_args::sanitize_device_name(body->name);
+    std::vector<std::string> waiting;
+    std::size_t at_address = 0;
+    if (!pin_at_address(body->pin, name, at, waiting, at_address)) {
+      BOOST_LOG(info) << "fork: pair: client ["sv << named_cert_p->name << "] has a PIN for the device at "sv << at << ", but "sv
+                      << (at_address ? "several devices wait there"sv : "none waits there"sv) << " ("sv << waiting.size() << " waiting)"sv;
+      response->write(SimpleWeb::StatusCode::client_error_conflict, display_group_policy::not_waiting_json(waiting, at_address), headers);
+      return;
+    }
+    BOOST_LOG(info) << "fork: pair: client ["sv << named_cert_p->name << "] gave the PIN for the device at "sv << at << (name.empty() ? ""s : " ("s + name + ')');
+    response->write(SimpleWeb::StatusCode::success_ok, R"({"paired":true})", headers);
+  }
+
   void setup(const std::string &pkey, const std::string &cert) {
     conf_intern.pkey = pkey;
     conf_intern.servercert = cert;
@@ -2034,6 +2264,8 @@ namespace nvhttp {
     https_server.resource["^/actions/bitrate$"]["POST"] = forkBitrate;  // [fork]
     https_server.resource["^/actions/cursor$"]["GET"] = forkCursor;  // [fork]
     https_server.resource["^/actions/cursor$"]["POST"] = forkCursor;  // [fork]
+    https_server.resource["^/actions/displaygroup$"]["GET"] = forkDisplayGroup;  // [fork]
+    https_server.resource["^/actions/pairdevice$"]["POST"] = forkPairDevice;  // [fork]
 
     https_server.config.reuse_address = true;
     https_server.config.address = net::af_to_any_address_string(address_family);

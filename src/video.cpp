@@ -7,6 +7,7 @@
 #include <bitset>
 #include <list>
 #include <thread>
+#include <utility>  // [fork] std::index_sequence
 
 // lib includes
 #include <boost/pointer_cast.hpp>
@@ -24,6 +25,7 @@ extern "C" {
 #include "config.h"
 #include "display_device.h"
 #include "fork/cursor_position.h"
+#include "fork/display_group.h"  // [fork]
 #include "fork/encoder_probe_reuse.h"
 #include "fork/vdisplay_recovery.h"
 #include "globals.h"
@@ -504,6 +506,33 @@ namespace video {
   // Keep a reference counter to ensure the capture thread only runs when other threads have a reference to the capture thread
   auto capture_thread_async = safe::make_shared<capture_thread_async_ctx_t>(start_capture_async, end_capture_async);
   auto capture_thread_sync = safe::make_shared<capture_thread_sync_ctx_t>(start_capture_sync, end_capture_sync);
+
+  // [fork] A display group's slot k >= 1 captures its own display on a thread of its own, running
+  // while a stream of that slot does (fork/display_group.h)
+  int start_capture_async_slot(capture_thread_async_ctx_t &ctx, int slot);
+
+  /// [fork] Slot k's context, in static storage like capture_thread_async's: safe::shared_t can't be
+  /// moved, and its count starts at zero only there
+  template<int slot>
+  safe::shared_t<capture_thread_async_ctx_t> &fork_slot_capture() {
+    static auto capture = safe::make_shared<capture_thread_async_ctx_t>(
+      [](capture_thread_async_ctx_t &ctx) {
+        return start_capture_async_slot(ctx, slot);
+      },
+      end_capture_async
+    );
+    return capture;
+  }
+
+  template<std::size_t... slots>
+  constexpr auto fork_slot_captures(std::index_sequence<slots...>) {
+    return std::array {&fork_slot_capture<(int) slots>...};
+  }
+
+  safe::shared_t<capture_thread_async_ctx_t> &fork_slot_capture(int slot) {
+    static constexpr auto captures = fork_slot_captures(std::make_index_sequence<display_group_policy::max_slots>());
+    return captures[std::clamp(slot, 0, display_group_policy::max_slots - 1)]();
+  }
 
 #ifdef _WIN32
   encoder_t nvenc {
@@ -1164,7 +1193,8 @@ namespace video {
     std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue,
     sync_util::sync_t<std::weak_ptr<platf::display_t>> &display_wp,
     safe::signal_t &reinit_event,
-    const encoder_t &encoder
+    const encoder_t &encoder,
+    int fork_slot  // [fork] A display group's slot k >= 1: only its own display, without display switches; else -1
   ) {
     std::vector<capture_ctx_t> capture_ctxs;
 
@@ -1179,7 +1209,9 @@ namespace video {
         capture_ctx.images->stop();
       }
 
-      fork_tweaks::vdisplay_recovery::forget_capture();  // [fork]
+      if (fork_slot < 1) {
+        fork_tweaks::vdisplay_recovery::forget_capture();  // [fork]
+      }
     });
 
     auto switch_display_event = mail::man->event<int>(mail::switch_display);
@@ -1194,13 +1226,20 @@ namespace video {
     std::vector<std::string> display_names;
     int display_p = -1;
     std::shared_ptr<platf::display_t> disp;
-    // [fork] Read under a lock: the virtual display's recovery monitor can rename it
-    auto preferred_display = proc::proc.stream_display();
+    // [fork] Read under a lock: the virtual display's recovery monitor can rename it. A display
+    // group's slot captures its own display, by the name Windows gives it now.
+    auto preferred_display = fork_slot >= 1 ? fork_tweaks::display_group::slot_display(fork_slot).value_or("") : proc::proc.stream_display();
     if (!preferred_display.empty()) {
       disp = platf::display(encoder.platform_formats->dev_type, preferred_display, capture_ctxs.front().config);
     }
     if (disp) {
-      fork_tweaks::vdisplay_recovery::note_capture(preferred_display);  // [fork]
+      if (fork_slot < 1) {
+        fork_tweaks::vdisplay_recovery::note_capture(preferred_display);  // [fork]
+      }
+    } else if (fork_slot >= 1) {
+      // [fork] Never another display
+      BOOST_LOG(error) << "fork: display group: slot "sv << fork_slot << " has no display to capture ("sv << preferred_display << ')';
+      return;
     } else {
       // Get all the monitor names now, rather than at boot, to
       // get the most up-to-date list available monitors
@@ -1343,7 +1382,7 @@ namespace video {
           capture_ctxs.emplace_back(std::move(*capture_ctx_queue->pop()));
         }
 
-        if (switch_display_event->peek()) {
+        if (fork_slot < 1 && switch_display_event->peek()) {  // [fork] not a display group slot's
           artificial_reinit = true;
           return false;
         }
@@ -1397,6 +1436,25 @@ namespace video {
               // Release the display before reenumerating displays, since some capture backends
               // only support a single display session per device/application.
               disp.reset();
+
+              // [fork] A display group's slot: its own display again, under the name it has now, and
+              // nothing once the group is gone
+              if (fork_slot >= 1) {
+                auto display = fork_tweaks::display_group::slot_display(fork_slot);
+                if (!display) {
+                  BOOST_LOG(info) << "fork: display group: slot "sv << fork_slot << " is gone, its capture ends"sv;
+                  break;
+                }
+                if (display->empty()) {
+                  std::this_thread::sleep_for(200ms);
+                  continue;
+                }
+                reset_display(disp, encoder.platform_formats->dev_type, *display, capture_ctxs.front().config);
+                if (disp) {
+                  break;
+                }
+                continue;
+              }
 
               // Refresh display names since a display removal might have caused the reinitialization
               // [fork] A copy, read under a lock: the virtual display's recovery monitor can rename it
@@ -2211,7 +2269,9 @@ namespace video {
 
     // absolute mouse coordinates require that the dimensions of the screen are known
     ctx.touch_port_events->raise(make_port(disp, ctx.config));
-    fork_tweaks::cursor_position::set_display({disp->offset_x, disp->offset_y, disp->width, disp->height});  // [fork] for LuzLunar's GET /actions/cursor
+    if (ctx.config.fork_capture_slot < 1) {  // [fork] a display group's slot 0, which has the pointer
+      fork_tweaks::cursor_position::set_display({disp->offset_x, disp->offset_y, disp->width, disp->height});  // [fork] for LuzLunar's GET /actions/cursor
+    }
 
     // Update client with our current HDR display state
     hdr_info_t hdr_info = std::make_unique<hdr_info_raw_t>(false);
@@ -2443,7 +2503,8 @@ namespace video {
       shutdown_event->raise(true);
     });
 
-    auto ref = capture_thread_async.ref();
+    // [fork] A display group's slot k >= 1 captures its own display on a thread of its own
+    auto ref = config.fork_capture_slot >= 1 ? fork_slot_capture(config.fork_capture_slot).ref() : capture_thread_async.ref();
     if (!ref) {
       return;
     }
@@ -2488,7 +2549,9 @@ namespace video {
 
       // absolute mouse coordinates require that the dimensions of the screen are known
       touch_port_event->raise(make_port(display.get(), config));
-      fork_tweaks::cursor_position::set_display({display->offset_x, display->offset_y, display->width, display->height});  // [fork] for LuzLunar's GET /actions/cursor
+      if (config.fork_capture_slot < 1) {  // [fork] a display group's slot 0, which has the pointer
+        fork_tweaks::cursor_position::set_display({display->offset_x, display->offset_y, display->width, display->height});  // [fork] for LuzLunar's GET /actions/cursor
+      }
 
       // Update client with our current HDR display state
       hdr_info_t hdr_info = std::make_unique<hdr_info_raw_t>(false);
@@ -2522,6 +2585,14 @@ namespace video {
     void *channel_data
   ) {
     auto idr_events = mail->event<bool>(mail::idr);
+
+    // [fork] A display group's slot past 0 has its own display only on the parallel path; the other
+    // would capture slot 0's
+    if (config.fork_capture_slot >= 1 && !(chosen_encoder->flags & PARALLEL_ENCODING)) {
+      BOOST_LOG(error) << "fork: display group: the encoder can't encode several streams at once, so slot "sv << config.fork_capture_slot << " can't stream"sv;
+      mail->event<bool>(mail::shutdown)->raise(true);
+      return;
+    }
 
     idr_events->raise(true);
     if (chosen_encoder->flags & PARALLEL_ENCODING) {
@@ -3072,10 +3143,34 @@ namespace video {
       capture_thread_ctx.capture_ctx_queue,
       std::ref(capture_thread_ctx.display_wp),
       std::ref(capture_thread_ctx.reinit_event),
-      std::ref(*capture_thread_ctx.encoder_p)
+      std::ref(*capture_thread_ctx.encoder_p),
+      -1  // [fork]
     };
 
     return 0;
+  }
+
+  // [fork] fork/display_group.h
+  int start_capture_async_slot(capture_thread_async_ctx_t &capture_thread_ctx, int slot) {
+    capture_thread_ctx.encoder_p = chosen_encoder;
+    capture_thread_ctx.reinit_event.reset();
+
+    capture_thread_ctx.capture_ctx_queue = std::make_shared<safe::queue_t<capture_ctx_t>>(30);
+
+    capture_thread_ctx.capture_thread = std::thread {
+      captureThread,
+      capture_thread_ctx.capture_ctx_queue,
+      std::ref(capture_thread_ctx.display_wp),
+      std::ref(capture_thread_ctx.reinit_event),
+      std::ref(*capture_thread_ctx.encoder_p),
+      slot
+    };
+
+    return 0;
+  }
+
+  bool fork_parallel_encoding() {
+    return chosen_encoder && (chosen_encoder->flags & PARALLEL_ENCODING);
   }
 
   void end_capture_async(capture_thread_async_ctx_t &capture_thread_ctx) {

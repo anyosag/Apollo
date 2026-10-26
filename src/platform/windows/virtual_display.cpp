@@ -816,6 +816,53 @@ PRESENCE getVirtualDisplayPresence(const GUID& guid, std::wstring& name) {
 	return sourceNameOf(*found, name) ? PRESENCE::ACTIVE : PRESENCE::UNKNOWN;
 }
 
+// [fork]
+bool setDisplayPositions(const std::vector<display_position_t>& positions) {
+	std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+	std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+	if (positions.empty() || !queryActiveConfig(paths, modes)) {
+		return false;
+	}
+
+	std::size_t placed = 0;
+	bool moved = false;
+	for (const auto& path : paths) {
+		std::wstring name;
+		if (!sourceNameOf(path, name)) {
+			continue;
+		}
+		for (const auto& want : positions) {
+			if (want.name != name) {
+				continue;
+			}
+			if (auto* mode = sourceModeOf(path, modes)) {
+				moved = moved || mode->sourceMode.position.x != want.x || mode->sourceMode.position.y != want.y;
+				mode->sourceMode.position.x = want.x;
+				mode->sourceMode.position.y = want.y;
+				placed++;
+			}
+			break;
+		}
+	}
+	if (placed != positions.size()) {
+		BOOST_LOG(warning) << "vdisplay: only "sv << placed << " of "sv << positions.size() << " displays to place are active"sv;
+	}
+	if (!placed) {
+		return false;
+	}
+	// Every display in its place already: no change, which would blank the screens
+	if (!moved) {
+		return true;
+	}
+
+	LONG status = applyConfig(paths, modes);
+	if (status != ERROR_SUCCESS) {
+		BOOST_LOG(warning) << "vdisplay: failed to place the displays ("sv << status << ')';
+		return false;
+	}
+	return true;
+}
+
 int removeAllVirtualDisplays() {
 	if (LUZVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 		return 0;
