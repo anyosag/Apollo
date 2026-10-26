@@ -72,13 +72,15 @@ namespace crypto {
     view             = _action << 1,     // Allow view streams
     launch           = _action << 2,     // Allow launch apps
     client_pair      = _action << 3,     // [fork] Allow giving another device's PIN (/actions/pairdevice); not one of _all_actions, which open the app list
+    host_log         = _action << 4,     // [fork] Allow reading Apollo's log and changing its level (/actions/log, src/fork/debug_log.h)
     _allow_view      = view | launch,    // If no view permission is granted, disconnect the device upon permission update
     _all_actions     = list | view | launch,
     _all_before_client_pair = 0x07FF1F00,  // [fork] _all before client_pair; clients with it get client_pair too
+    _all_before_host_log = 0x0FFF1F00,  // [fork] _all before host_log; clients with it get host_log too
 
     _default         = view | list,      // Default permissions for new clients
     _no              = 0,                // No permissions are granted
-    _all             = _all_inputs | _all_opeiations | _all_actions | client_pair, // All current permissions [fork] client_pair
+    _all             = _all_inputs | _all_opeiations | _all_actions | client_pair | host_log, // All current permissions [fork] client_pair, host_log
   };
 
   inline constexpr PERM

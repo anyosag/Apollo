@@ -215,6 +215,13 @@ namespace fork_tweaks::clipboard {
       }
       token = token_for(snapshot.sequence);
       BOOST_LOG(debug) << "clipboard: formats offered: "sv << join(snapshot.formats);
+      if (snapshot.files_through_ole) {
+        BOOST_LOG(debug) << "clipboard: the copied files came from the clipboard's OLE data object"sv;
+      }
+      if (snapshot.items.empty() && snapshot.files.empty() && !snapshot.formats.empty()) {
+        // Something is on the clipboard, but nothing that can be sent: which formats, so it can be added
+        BOOST_LOG(info) << "clipboard: nothing on the PC's clipboard can be sent; formats: "sv << join(snapshot.formats);
+      }
       if (snapshot.image_not_sent) {
         BOOST_LOG(info) << "clipboard: an image was offered but isn't sent (a text copy, or it couldn't be converted); formats: "sv << join(snapshot.formats);
       }

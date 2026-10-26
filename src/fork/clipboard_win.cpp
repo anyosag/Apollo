@@ -7,11 +7,13 @@
 // standard includes
   #include <algorithm>
   #include <cstring>
+  #include <thread>
   #include <utility>
 
 // platform includes
   #include <windows.h>
   #include <objbase.h>
+  #include <ole2.h>
   // Defines the WIC GUIDs here, so windowscodecs doesn't need linking
   #include <initguid.h>
   #include <wincodec.h>
@@ -120,6 +122,41 @@ namespace fork_tweaks::clipboard_win {
         files.push_back(std::move(wide));
         start = end + 1;
       }
+      return files;
+    }
+
+    /**
+     * CF_HDROP asked of the OLE data object on the clipboard. Windows 11's File Explorer copies files
+     * as that object alone: the clipboard lists only "DataObject", and the file list comes only from
+     * the object itself (OleGetClipboard()), as Explorer's own paste gets it. OLE needs a
+     * single-threaded apartment and the clipboard worker's is multithreaded, so it's asked from a
+     * thread of its own. Call it with the clipboard closed: OleGetClipboard() opens it.
+     */
+    std::vector<std::wstring> ole_dropped_files() {
+      std::vector<std::wstring> files;
+      std::thread([&files]() {
+        if (FAILED(OleInitialize(nullptr))) {
+          return;
+        }
+        IDataObject *data = nullptr;
+        if (SUCCEEDED(OleGetClipboard(&data)) && data != nullptr) {
+          FORMATETC format {static_cast<CLIPFORMAT>(CF_HDROP), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+          STGMEDIUM medium {};
+          if (SUCCEEDED(data->GetData(&format, &medium))) {
+            if (medium.tymed == TYMED_HGLOBAL && medium.hGlobal != nullptr) {
+              SIZE_T size = GlobalSize(medium.hGlobal);
+              const void *memory = GlobalLock(medium.hGlobal);
+              if (memory != nullptr) {
+                files = dropped_files(std::string(static_cast<const char *>(memory), size));
+                GlobalUnlock(medium.hGlobal);
+              }
+            }
+            ReleaseStgMedium(&medium);
+          }
+          data->Release();
+        }
+        OleUninitialize();
+      }).join();
       return files;
     }
 
@@ -439,6 +476,7 @@ namespace fork_tweaks::clipboard_win {
     };
 
     std::vector<offered> formats;
+    bool ole_object = false;  // an OLE data object is on the clipboard
     for (UINT format = EnumClipboardFormats(0); format != 0; format = EnumClipboardFormats(format)) {
       std::string name = format_name(format);
       formats.push_back({format, name, kind_of(format, name)});
@@ -448,6 +486,9 @@ namespace fork_tweaks::clipboard_win {
       }
       if (format == CF_HDROP) {
         out.file_copy = true;
+      }
+      if (name == "DataObject") {
+        ole_object = true;
       }
     }
 
@@ -561,6 +602,14 @@ namespace fork_tweaks::clipboard_win {
       }
     }
     CloseClipboard();
+
+    // Files that only the OLE data object lists (Windows 11's File Explorer), or a CF_HDROP that
+    // couldn't be read: asked of the object. Not for copies that offered anything else, like Office's.
+    if (out.files.empty() && items.empty() && dib.empty() && (ole_object || out.file_copy)) {
+      out.files = ole_dropped_files();
+      out.files_through_ole = !out.files.empty();
+      out.file_copy = out.file_copy || out.files_through_ole;
+    }
 
     // Converting happens after closing, so the clipboard isn't held while encoding
     if (!dib.empty() && !have_encoded_image) {

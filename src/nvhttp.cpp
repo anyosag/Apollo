@@ -31,6 +31,7 @@
 #include "fork/clipboard_bundle.h"  // [fork]
 #include "fork/clipboard_files.h"  // [fork]
 #include "fork/cursor_position.h"  // [fork]
+#include "fork/debug_log.h"  // [fork]
 #include "fork/display_group.h"  // [fork]
 #include "fork/fork_config.h"  // [fork]
 #include "fork/host_sleep.h"  // [fork]
@@ -379,7 +380,7 @@ namespace nvhttp {
         named_cert_p->display_mode = el.value("display_mode", "");
         named_cert_p->perm = (PERM)(util::get_non_string_json_value<uint32_t>(el, "perm", (uint32_t)PERM::_all)) & PERM::_all;
         if (named_cert_p->perm == PERM::_all_before_host_update || named_cert_p->perm == PERM::_all_before_client_drive || named_cert_p->perm == PERM::_all_before_host_sleep ||
-            named_cert_p->perm == PERM::_all_before_client_pair) {
+            named_cert_p->perm == PERM::_all_before_client_pair || named_cert_p->perm == PERM::_all_before_host_log) {
           named_cert_p->perm = PERM::_all;  // [fork] a client with every permission keeps every permission
         }
         named_cert_p->enable_legacy_ordering = el.value("enable_legacy_ordering", true);
@@ -1090,6 +1091,7 @@ namespace nvhttp {
       tree.put("root.LuzDisplayGroup", fork_tweaks::display_group::max_slots());  // [fork] "Desktop (multiple displays)" runs, with up to this many slots
       tree.put("root.LuzDisplayGroupApp", fork_tweaks::display_group::app_id());  // [fork] its app id
       tree.put("root.LuzPairDevice", fork_tweaks::pair_from_client ? 1 : 0);  // [fork] /actions/pairdevice works
+      tree.put("root.LuzLog", 1);  // [fork] /actions/log works
       tree.put("root.VirtualDisplayCapable", true);
       if (!!(named_cert_p->perm & PERM::_all_actions)) {
         tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK);
@@ -2154,6 +2156,25 @@ namespace nvhttp {
     response->write(SimpleWeb::StatusCode::success_ok, R"({"paired":true})", headers);
   }
 
+  /**
+   * @brief [fork] Apollo's log for LuzLunar's Mac (src/fork/debug_log.h): GET ?lines&grep&from gives
+   * lines of this run's log; POST {"level", "minutes"} changes the level for a while, {"mark"} logs a
+   * line to find. Needs the Read Log permission.
+   */
+  void forkLog(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    auto named_cert_p = get_verified_cert(request);
+    fork_tweaks::debug_log::client_t client {named_cert_p->name, named_cert_p->uuid, !!(named_cert_p->perm & PERM::host_log)};
+    auto args = request->parse_query_string();
+    fork_tweaks::debug_log::query_t query {get_arg(args, "lines", ""), get_arg(args, "grep", ""), get_arg(args, "from", "")};
+    auto reply = fork_tweaks::debug_log::handle(client, request->method, query, request->content.string());
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    response->write(static_cast<SimpleWeb::StatusCode>(reply.status), reply.body, headers);
+  }
+
   void setup(const std::string &pkey, const std::string &cert) {
     conf_intern.pkey = pkey;
     conf_intern.servercert = cert;
@@ -2266,6 +2287,8 @@ namespace nvhttp {
     https_server.resource["^/actions/cursor$"]["POST"] = forkCursor;  // [fork]
     https_server.resource["^/actions/displaygroup$"]["GET"] = forkDisplayGroup;  // [fork]
     https_server.resource["^/actions/pairdevice$"]["POST"] = forkPairDevice;  // [fork]
+    https_server.resource["^/actions/log$"]["GET"] = forkLog;  // [fork]
+    https_server.resource["^/actions/log$"]["POST"] = forkLog;  // [fork]
 
     https_server.config.reuse_address = true;
     https_server.config.address = net::af_to_any_address_string(address_family);

@@ -6,10 +6,16 @@
 #include "clipboard_win.h"
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include <windows.h>
+#include <ole2.h>
 #include <zlib.h>
 
 using namespace fork_tweaks::clipboard_win;
@@ -72,6 +78,151 @@ static bool has_format(const snapshot &s, const char *name) {
     }
   }
   return false;
+}
+
+// CF_HDROP's memory for the paths, as Explorer writes it (DROPFILES, then the paths)
+static std::string drop_list(const std::vector<std::wstring> &files) {
+  struct {
+    DWORD offset;
+    POINT point;
+    BOOL non_client;
+    BOOL wide;
+  } header {20, {0, 0}, FALSE, TRUE};
+  static_assert(sizeof(header) == 20, "DROPFILES is 20 bytes");
+  std::string out(reinterpret_cast<const char *>(&header), sizeof(header));
+  for (const std::wstring &file : files) {
+    out.append(reinterpret_cast<const char *>(file.c_str()), (file.size() + 1) * sizeof(wchar_t));
+  }
+  out.append(sizeof(wchar_t), '\0');
+  return out;
+}
+
+// The COM interfaces used below, so nothing more needs linking
+static const GUID k_iid_unknown = {0x00000000, 0x0000, 0x0000, {0xC0, 0, 0, 0, 0, 0, 0, 0x46}};
+static const GUID k_iid_data_object = {0x0000010e, 0x0000, 0x0000, {0xC0, 0, 0, 0, 0, 0, 0, 0x46}};
+static const GUID k_iid_enum_formats = {0x00000103, 0x0000, 0x0000, {0xC0, 0, 0, 0, 0, 0, 0, 0x46}};
+
+// An enumerator of no formats
+class no_formats: public IEnumFORMATETC {
+public:
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override {
+    if (IsEqualGUID(riid, k_iid_unknown) || IsEqualGUID(riid, k_iid_enum_formats)) {
+      *out = static_cast<IEnumFORMATETC *>(this);
+      AddRef();
+      return S_OK;
+    }
+    *out = nullptr;
+    return E_NOINTERFACE;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&m_refs); }
+  ULONG STDMETHODCALLTYPE Release() override {
+    ULONG refs = InterlockedDecrement(&m_refs);
+    if (refs == 0) {
+      delete this;
+    }
+    return refs;
+  }
+  HRESULT STDMETHODCALLTYPE Next(ULONG, FORMATETC *, ULONG *fetched) override {
+    if (fetched != nullptr) {
+      *fetched = 0;
+    }
+    return S_FALSE;
+  }
+  HRESULT STDMETHODCALLTYPE Skip(ULONG) override { return S_FALSE; }
+  HRESULT STDMETHODCALLTYPE Reset() override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE Clone(IEnumFORMATETC **out) override {
+    *out = new no_formats();
+    return S_OK;
+  }
+
+private:
+  LONG m_refs = 1;
+};
+
+// What Windows 11's File Explorer puts on the clipboard: an OLE data object that lists no formats,
+// so the clipboard shows only OLE's own ("DataObject"), and gives CF_HDROP when asked for it
+class explorer_copy: public IDataObject {
+public:
+  explicit explorer_copy(std::string drop): m_drop(std::move(drop)) {}
+
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **out) override {
+    if (IsEqualGUID(riid, k_iid_unknown) || IsEqualGUID(riid, k_iid_data_object)) {
+      *out = static_cast<IDataObject *>(this);
+      AddRef();
+      return S_OK;
+    }
+    *out = nullptr;
+    return E_NOINTERFACE;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return InterlockedIncrement(&m_refs); }
+  ULONG STDMETHODCALLTYPE Release() override {
+    ULONG refs = InterlockedDecrement(&m_refs);
+    if (refs == 0) {
+      delete this;
+    }
+    return refs;
+  }
+
+  HRESULT STDMETHODCALLTYPE GetData(FORMATETC *format, STGMEDIUM *medium) override {
+    if (format->cfFormat != CF_HDROP || (format->tymed & TYMED_HGLOBAL) == 0) {
+      return DV_E_FORMATETC;
+    }
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, m_drop.size());
+    if (memory == nullptr) {
+      return E_OUTOFMEMORY;
+    }
+    std::memcpy(GlobalLock(memory), m_drop.data(), m_drop.size());
+    GlobalUnlock(memory);
+    medium->tymed = TYMED_HGLOBAL;
+    medium->hGlobal = memory;
+    medium->pUnkForRelease = nullptr;
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE GetDataHere(FORMATETC *, STGMEDIUM *) override { return E_NOTIMPL; }
+  HRESULT STDMETHODCALLTYPE QueryGetData(FORMATETC *format) override { return format->cfFormat == CF_HDROP ? S_OK : DV_E_FORMATETC; }
+  HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc(FORMATETC *, FORMATETC *out) override {
+    out->ptd = nullptr;
+    return E_NOTIMPL;
+  }
+  HRESULT STDMETHODCALLTYPE SetData(FORMATETC *, STGMEDIUM *, BOOL) override { return E_NOTIMPL; }
+  HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD, IEnumFORMATETC **out) override {
+    *out = new no_formats();
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE DAdvise(FORMATETC *, DWORD, IAdviseSink *, DWORD *) override { return OLE_E_ADVISENOTSUPPORTED; }
+  HRESULT STDMETHODCALLTYPE DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
+  HRESULT STDMETHODCALLTYPE EnumDAdvise(IEnumSTATDATA **out) override {
+    *out = nullptr;
+    return OLE_E_ADVISENOTSUPPORTED;
+  }
+
+private:
+  LONG m_refs = 1;
+  std::string m_drop;
+};
+
+// Puts an explorer_copy on the clipboard from an OLE thread of its own, as Explorer does, and answers
+// OLE's calls for it until `finished`
+static void explorer_thread(std::string drop, HANDLE ready, HANDLE finished, bool &set) {
+  if (FAILED(OleInitialize(nullptr))) {
+    SetEvent(ready);
+    return;
+  }
+  explorer_copy *copy = new explorer_copy(std::move(drop));
+  set = SUCCEEDED(OleSetClipboard(copy));
+  copy->Release();  // the clipboard holds its own reference
+  SetEvent(ready);
+  while (MsgWaitForMultipleObjects(1, &finished, FALSE, INFINITE, QS_ALLINPUT) == WAIT_OBJECT_0 + 1) {
+    MSG message;
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&message);
+      DispatchMessageW(&message);
+    }
+  }
+  if (set) {
+    OleSetClipboard(nullptr);
+  }
+  OleUninitialize();
 }
 
 int main() {
@@ -163,6 +314,52 @@ int main() {
   CHECK(has_format(copied, "Preferred DropEffect"));
   CHECK(find(copied, "text/plain") != nullptr);
   CHECK(find(copied, "image/png") == nullptr);
+
+  // Windows 11's File Explorer: the files come only from the clipboard's OLE data object, and a read
+  // from a multithreaded apartment (like Apollo's clipboard worker) still finds them
+  {
+    std::vector<std::wstring> explorer_files = {L"C:\\Users\\Public\\From Explorer", L"C:\\Users\\Public\\b.txt"};
+    HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    HANDLE finished = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    bool set = false;
+    std::thread explorer(explorer_thread, drop_list(explorer_files), ready, finished, std::ref(set));
+    WaitForSingleObject(ready, 10000);
+    if (!set) {
+      std::printf("OLE-only file copy skipped: OleSetClipboard isn't available here\n");
+    } else {
+      // A read that hangs fails the step instead of stalling CI
+      snapshot from_explorer;
+      bool read_ok = false;
+      HANDLE read_done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+      std::thread reader([&]() {
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        read_ok = read(from_explorer);
+        CoUninitialize();
+        SetEvent(read_done);
+      });
+      if (WaitForSingleObject(read_done, 15000) != WAIT_OBJECT_0) {
+        std::printf("FAIL %s:%d: reading an OLE-only file copy didn't finish in 15 s\n", __FILE__, __LINE__);
+        std::fflush(stdout);
+        std::_Exit(1);
+      }
+      reader.join();
+      CloseHandle(read_done);
+      CHECK(read_ok);
+      CHECK(has_format(from_explorer, "DataObject"));
+      CHECK(from_explorer.files == explorer_files);
+      CHECK(from_explorer.file_copy && from_explorer.files_through_ole);
+      CHECK(from_explorer.items.empty());
+    }
+    SetEvent(finished);
+    explorer.join();
+    CloseHandle(ready);
+    CloseHandle(finished);
+  }
+
+  // A copy that publishes its formats (text) is read as before, without asking OLE
+  CHECK(write({{"text/plain", "after"}}, false) != 0);
+  snapshot after;
+  CHECK(read(after) && !after.files_through_ole && find(after, "text/plain") != nullptr);
 
   if (s_Failures > 0) {
     std::printf("%d check(s) failed\n", s_Failures);
