@@ -77,6 +77,13 @@ namespace logging {
   void log_flush();
 
   /**
+   * @brief [fork] Changes the minimum level logged from now on, for Apollo's own log and
+   * libdisplaydevice's (fork/debug_log.h). FFmpeg's stays as configured.
+   * @param min_log_level The log level.
+   */
+  void set_min_log_level(int min_log_level);
+
+  /**
    * @brief Print help to stdout.
    * @param name The name of the program.
    * @examples

@@ -263,6 +263,18 @@ namespace logging {
     }
   }
 
+  void set_min_log_level(int min_log_level) {  // [fork]
+    auto current = sink;
+    if (current) {
+      current->set_filter(severity >= min_log_level);
+    }
+#ifndef __ANDROID__
+    constexpr int min_level {static_cast<int>(display_device::Logger::LogLevel::verbose)};
+    constexpr int max_level {static_cast<int>(display_device::Logger::LogLevel::fatal)};
+    display_device::Logger::get().setLogLevel(static_cast<display_device::Logger::LogLevel>(std::min(std::max(min_level, min_log_level), max_level)));
+#endif
+  }
+
   void print_help(const char *name) {
     std::cout
       << "Usage: "sv << name << " [options] [/path/to/configuration_file] [--cmd]"sv << std::endl

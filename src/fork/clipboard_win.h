@@ -23,6 +23,7 @@ namespace fork_tweaks::clipboard_win {
     bool concealed = false;  ///< A password manager marked the content as private
     bool file_copy = false;  ///< Files copied in Explorer (CF_HDROP); no image is read
     std::vector<std::wstring> files;  ///< Their full paths, in the order copied
+    bool files_through_ole = false;  ///< The clipboard listed only an OLE data object, which gave the files (Windows 11's File Explorer)
     bool image_not_sent = false;  ///< An image was offered but isn't in items (a text copy, or it couldn't be converted)
     std::vector<clipbundle::item> items;  ///< In sending order
     std::vector<std::string> formats;  ///< Every format offered, for debug logs
