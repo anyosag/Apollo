@@ -134,16 +134,23 @@ message("PROJECT_MONTH: ${PROJECT_MONTH}")
 message("PROJECT_DAY: ${PROJECT_DAY}")
 
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_NAME="${PROJECT_NAME}")
-list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION="${PROJECT_VERSION}")
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_MAJOR="${PROJECT_VERSION_MAJOR}")
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_MINOR="${PROJECT_VERSION_MINOR}")
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_PATCH="${PROJECT_VERSION_PATCH}")
-list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_COMMIT="${GITHUB_COMMIT}")
 
-# [fork] Which CI run built this, and whether from master, for over-the-air updates (src/fork/updater.cpp)
+# [fork] The full version and commit, and which CI run built this and whether from master (for
+# over-the-air updates, src/fork/updater.cpp), go in fork_build_version.h in the build folder, which
+# only main.cpp, confighttp.cpp and fork/updater.cpp include. As definitions for every file they
+# changed each build's compile commands, so the compiler cache (build-windows.yml) never hit.
+# file(CONFIGURE) rewrites the header only when it changes.
+set(FORK_BUILD_VERSION_H "// This build's version, commit and run, written by cmake/prep/build_version.cmake\n#pragma once\n")
+string(APPEND FORK_BUILD_VERSION_H "#define PROJECT_VERSION \"${PROJECT_VERSION}\"\n")
+string(APPEND FORK_BUILD_VERSION_H "#define PROJECT_VERSION_COMMIT \"${GITHUB_COMMIT}\"\n")
 if(DEFINED ENV{FORK_BUILD_RUN} AND "$ENV{FORK_BUILD_RUN}" MATCHES "^[0-9]+$")
-    list(APPEND SUNSHINE_DEFINITIONS FORK_BUILD_RUN=$ENV{FORK_BUILD_RUN})
+    string(APPEND FORK_BUILD_VERSION_H "#define FORK_BUILD_RUN $ENV{FORK_BUILD_RUN}\n")
 endif()
 if(DEFINED ENV{FORK_BUILD_CHANNEL} AND "$ENV{FORK_BUILD_CHANNEL}" MATCHES "^[a-z]+$")
-    list(APPEND SUNSHINE_DEFINITIONS FORK_BUILD_CHANNEL="$ENV{FORK_BUILD_CHANNEL}")
+    string(APPEND FORK_BUILD_VERSION_H "#define FORK_BUILD_CHANNEL \"$ENV{FORK_BUILD_CHANNEL}\"\n")
 endif()
+file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/fork-generated/fork_build_version.h" CONTENT "${FORK_BUILD_VERSION_H}" @ONLY)
+include_directories("${CMAKE_BINARY_DIR}/fork-generated")

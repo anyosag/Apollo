@@ -101,13 +101,14 @@ jobs:
           "install.ps1 and uninstall.ps1 work; the layout was $klid"
 
       # Every submodule but the Linux-only Wayland protocols, which Windows doesn't build. Their host,
-      # gitlab.freedesktop.org, sometimes times out and failed the checkout.
+      # gitlab.freedesktop.org, sometimes times out and failed the checkout. Only the pinned commit of
+      # each (nothing reads their history), several at once.
       - name: Checkout submodules
         shell: bash
         run: |
           git config submodule.third-party/wayland-protocols.update none
           git config submodule.third-party/wlr-protocols.update none
-          git submodule update --init --recursive
+          git submodule update --init --recursive --depth 1 --jobs 8
 
       # Fixes the fork carries in submodules it doesn't own (patches/, see FORK.md)
       - name: Apply submodule patches
@@ -210,6 +211,7 @@ jobs:
             mingw-w64-ucrt-x86_64-opus
             mingw-w64-ucrt-x86_64-toolchain
             mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-ccache
 
       # Fork code that doesn't need the rest of Apollo: the clipboard bundle and trackpad frames
       # (shared with LuzLunar), a round trip through the real Windows clipboard, and gestures on a
@@ -245,24 +247,43 @@ jobs:
             echo "#include \"$header\"" | g++ -std=c++23 -fsyntax-only -iquote . -Ithird-party -x c++ -
           done
 
+      # The compiler cache, kept between runs: most commits change a few files, so most of the build
+      # comes from it. Each run saves its own copy; the next run starts from the newest one its branch,
+      # or master, has. The version, commit and run go in a generated header only three files include
+      # (cmake/prep/build_version.cmake), so the other files' compile commands stay the same.
+      - name: Restore the compiler cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-windows-x64-${{ github.run_id }}
+          restore-keys: ccache-windows-x64-
+
       - name: Build
         shell: msys2 {0}
         env:
           BRANCH: ${{ github.ref_name }}
           CLONE_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          CCACHE_DIR: ${{ runner.temp }}/ccache
+          CCACHE_MAXSIZE: 2G
         run: |
           export PATH="$PATH:$(cygpath -u "$NODE_DIR")"
           node --version
           gcc --version | head -n 1
           cmake --version | head -n 1
+          ccache --version | head -n 1
+          # This run's hits and misses only
+          ccache --zero-stats
 
           # CMAKE_POLICY_VERSION_MINIMUM lets CMake 4 configure submodules that still declare CMake < 3.5
           cmake -B build -G Ninja -S . \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DBUILD_DOCS=OFF \
             -DBUILD_TESTS=OFF
           ninja -C build
+          ccache --show-stats
 
       # The Mac drive's helper against a real SMB share on this runner: a local account shares a
       # folder, which the helper maps through 127.0.0.1 the way it maps LuzLunar's Mac, and removes

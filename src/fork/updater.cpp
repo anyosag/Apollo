@@ -42,7 +42,10 @@
   #include "src/platform/windows/misc.h"
 #endif
 
-// CI sets these for the build (cmake/prep/build_version.cmake); a local build is a branch build
+// This build's version, commit, run and channel, generated in the build folder by
+// cmake/prep/build_version.cmake. CI sets the run and channel; a local build is a branch build.
+#include "fork_build_version.h"
+
 #ifndef FORK_BUILD_RUN
   #define FORK_BUILD_RUN 0
 #endif
