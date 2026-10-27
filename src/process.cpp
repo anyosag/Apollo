@@ -2086,7 +2086,8 @@ namespace proc {
       ctx.idx = std::to_string(i);
       ctx.uuid = DISPLAY_GROUP_UUID;
       ctx.name = "Desktop (multiple displays)";
-      ctx.image_path = parse_env_val(this_env, "desktop.png");
+      // [fork] Its own cover (scripts/fork/icons), so it doesn't look like Desktop in the app grid
+      ctx.image_path = parse_env_val(this_env, "desktop_multi.png");
       ctx.virtual_display = true;
       ctx.scale_factor = 100;
       ctx.use_app_identity = false;

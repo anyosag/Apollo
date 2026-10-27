@@ -28,6 +28,19 @@ ${screen}
 <path d="M282 397H318V430H282Z" fill="${CREAM}"/>
 <rect x="222" y="426" width="156" height="26" rx="13" fill="${CREAM}"/>`;
 
+// monitor()'s shape at another size: its screen at (x, y), w x h, the rest scaled by s.
+const r1 = (v) => Math.round(v * 10) / 10;
+const monitorAt = (x, y, w, h, s) => {
+  const cx = x + w / 2;
+  const bottom = y + h;
+  const rect = `x="${x}" y="${y}" width="${w}" height="${h}" rx="${r1(26 * s)}"`;
+  return `
+<rect ${rect} ${wash}/>
+<rect ${rect} ${lineW(r1(SW * s))}/>
+<path d="M${r1(cx - 18 * s)} ${r1(bottom + 12 * s)}H${r1(cx + 18 * s)}V${r1(bottom + 45 * s)}H${r1(cx - 18 * s)}Z" fill="${CREAM}"/>
+<rect x="${r1(cx - 78 * s)}" y="${r1(bottom + 41 * s)}" width="${r1(156 * s)}" height="${r1(26 * s)}" rx="${r1(13 * s)}" fill="${CREAM}"/>`;
+};
+
 const GLYPHS = {
   desktop: monitor(),
   'desktop-alt': monitor(`
@@ -40,6 +53,8 @@ const GLYPHS = {
   virtual_desktop: monitor(`
 <path d="${sparkle(292, 306, 58)}" fill="#fff"/>
 <path d="${sparkle(352, 258, 20)}" fill="#fff"/>`),
+  // "Desktop (multiple displays)": two monitors of different sizes on one desk
+  desktop_multi: monitorAt(78, 226, 236, 156, 0.92) + monitorAt(350, 275, 180, 120, 0.72),
   steam: `
 <path d="M222 236H378C428 236 452 262 463 312L482 400C492 452 450 474 418 442L384 404H216L182 442C150 474 108 452 118 400L137 312C148 262 172 236 222 236Z" fill="${CREAM}"/>
 <g fill="${C.ink}">
@@ -67,6 +82,7 @@ const LABELS = {
   desktop: 'Desktop',
   'desktop-alt': 'Desktop',
   virtual_desktop: 'Virtual Desktop',
+  desktop_multi: 'Multiple Displays',
   steam: 'Steam',
   input_only: 'Remote Input',
   terminate: 'Terminate',

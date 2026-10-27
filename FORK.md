@@ -104,9 +104,9 @@ The icons and app covers are replaced wholesale with the LuzLunar look (see [For
 
 - `apollo.svg`, `apollo.png`, `apollo.ico`, `apollo.icns`
 - `src_assets/common/assets/web/public/images/`: `apollo.ico`, `logo-apollo.svg`, `logo-apollo-16.png`, `logo-apollo-45.png`, and `apollo-playing`, `apollo-pausing`, `apollo-locked` as `.svg`, `.png`, `.ico`, `-16.png` and `-45.png`
-- `src_assets/common/assets/`: `desktop.png`, `desktop-alt.png`, `virtual_desktop.png`, `steam.png`, `input_only.png`, `terminate.png`, `template.png`
+- `src_assets/common/assets/`: `desktop.png`, `desktop-alt.png`, `virtual_desktop.png`, `steam.png`, `input_only.png`, `terminate.png`, `template.png`, and the fork's own `desktop_multi.png` (two monitors, "Multiple Displays") for Desktop (multiple displays)
 
-If a sync conflicts on one of them, keep ours. If upstream adds an image, draw it in `scripts/fork/icons/` too. `box.png` stays upstream's: Moonlight clients treat a 130×180 image as "no box art" and draw their own placeholder with the app name.
+If a sync conflicts on one of them, keep ours. If upstream adds an image, draw it in `scripts/fork/icons/` too. The labels need Segoe UI Semibold, which only Windows has, so the Windows build renders every cover into its `covers` artifact ("Render the app covers"); a new or redrawn cover is taken from there, and the unchanged ones come out byte for byte the same. `box.png` stays upstream's: Moonlight clients treat a 130×180 image as "no box art" and draw their own placeholder with the app name.
 
 ### Upstream fixes carried by the fork
 
