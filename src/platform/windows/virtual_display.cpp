@@ -674,6 +674,62 @@ static bool hasPath(const LUID& adapter, uint32_t targetId) {
 	return false;
 }
 
+// [fork] Switches on the display at this adapter and target, next to the displays that are on,
+// which stay as they are. Windows remembers which displays were on for each set of connected
+// displays, so a display it has seen switched off arrives switched off again, and gets no path.
+static bool switchOnTarget(const LUID& adapter, uint32_t targetId) {
+	UINT32 pathCount = 0;
+	UINT32 modeCount = 0;
+	if (GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) {
+		return false;
+	}
+	std::vector<DISPLAYCONFIG_PATH_INFO> all(pathCount);
+	std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+	if (QueryDisplayConfig(QDC_ALL_PATHS, &pathCount, all.data(), &modeCount, modes.data(), nullptr) != ERROR_SUCCESS) {
+		return false;
+	}
+	all.resize(pathCount);
+	modes.resize(modeCount);
+
+	std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+	for (const auto& path : all) {
+		if (path.flags & DISPLAYCONFIG_PATH_ACTIVE) {
+			paths.push_back(path);
+		}
+	}
+	for (const auto& path : all) {
+		if ((path.flags & DISPLAYCONFIG_PATH_ACTIVE) || !path.targetInfo.targetAvailable ||
+			path.targetInfo.id != targetId || !sameLuid(path.targetInfo.adapterId, adapter)) {
+			continue;
+		}
+		// A source that no display that's on uses
+		bool taken = false;
+		for (const auto& on : paths) {
+			taken = taken || (sameLuid(on.sourceInfo.adapterId, path.sourceInfo.adapterId) && on.sourceInfo.id == path.sourceInfo.id);
+		}
+		if (taken) {
+			continue;
+		}
+
+		auto on = path;
+		on.flags = DISPLAYCONFIG_PATH_ACTIVE;
+		on.sourceInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+		on.targetInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+		paths.push_back(on);
+		// Windows picks the new display's mode and place; saved, so this set of displays has it on from now on
+		LONG status = SetDisplayConfig((UINT32)paths.size(), paths.data(), (UINT32)modes.size(), modes.data(),
+			SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES | SDC_SAVE_TO_DATABASE);
+		if (status != ERROR_SUCCESS) {
+			BOOST_LOG(warning) << "vdisplay: Windows didn't switch the new virtual display on, error "sv << status;
+			return false;
+		}
+		s_modeSets++;
+		return true;
+	}
+	BOOST_LOG(warning) << "vdisplay: Windows offers no way to switch the new virtual display on"sv;
+	return false;
+}
+
 std::wstring createVirtualDisplay(const LUZVDA_DISPLAY_DESC& desc) {
 	if (LUZVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 		return std::wstring();
@@ -697,11 +753,19 @@ std::wstring createVirtualDisplay(const LUZVDA_DISPLAY_DESC& desc) {
 		return std::wstring();
 	}
 
-	// Windows gives the display a path shortly after it arrives
+	// Windows gives the display a path shortly after it arrives ([fork] within 350 ms in the logs),
+	// unless it remembers this set of displays with this one off: then it's switched on here
 	auto adapter = LUZVDA::fromProtocol(output.adapter);
 	std::wstring name;
+	bool switchedOn = false;
 	while (!displayNameFor(adapter, output.target_id, name)) {
-		if (std::chrono::steady_clock::now() - start > 3s) {
+		auto waited = std::chrono::steady_clock::now() - start;
+		if (!switchedOn && waited > 1s) {
+			switchedOn = true;
+			BOOST_LOG(info) << "vdisplay: Windows left the new virtual display off after 1 s (it remembers it off with these displays); switching it on"sv;
+			switchOnTarget(adapter, output.target_id);
+		}
+		if (waited > 4s) {
 			BOOST_LOG(warning) << "vdisplay: no name for the new virtual display in time"sv;
 			return std::wstring();
 		}

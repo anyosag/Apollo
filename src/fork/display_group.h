@@ -5,7 +5,8 @@
  * while the app runs.
  *
  * proc_t runs the group with the app: begin() before slot 0's display is made, create() once it's
- * there, arrange() whenever slot 0's display changed or came back, end() when the app quits. Slot 0
+ * there, arrange() whenever slot 0's display changed or came back, end() when the app quits, and
+ * restore() once slot 0's display is gone too. Slot 0
  * is the app's own virtual display, which proc_t sets up as for any app; this module makes, places
  * and removes the others. The group outlives its streams, so Windows keeps its windows where they
  * were until the app quits.
@@ -91,9 +92,16 @@ namespace fork_tweaks::display_group {
   /// Slot 0 resumed with another layout while nobody streams: the other slots' displays are made again
   void rebuild(const display_group_policy::declaration_t &declaration, const lead_t &lead);
 
-  /// The app quits: the other slots' streams stop, their displays go, and the PC's displays come
-  /// back as begin() found them
+  /// The app quits: the other slots' streams stop and their displays go
   void end();
+
+  /**
+   * @brief After end(), once slot 0's display is gone too: the PC's displays as begin() found them.
+   * Not before: Windows remembers which displays were on for each set of connected displays, so
+   * switching the PC's back on with a group display still there had it remember that display off,
+   * and the next group's slot 0 display arrived off.
+   */
+  void restore();
 
   /// @}
 
