@@ -1330,7 +1330,7 @@ namespace proc {
       }
     }
 
-    // [fork] A display group's other displays go, and the PC's displays come back as they were
+    // [fork] A display group's other displays go
     if (display_group_app()) {
       fork_tweaks::display_group::end();
     }
@@ -1344,6 +1344,11 @@ namespace proc {
       } else {
         BOOST_LOG(warning) << "Virtual Display remove failed, but it seems it was not created correctly either.";
       }
+    }
+
+    // [fork] Then, with no group display left, the PC's displays come back as they were
+    if (display_group_app()) {
+      fork_tweaks::display_group::restore();
     }
 
     // Only show the Stopped notification if we actually have an app to stop

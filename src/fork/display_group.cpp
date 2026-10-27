@@ -68,6 +68,9 @@ namespace fork_tweaks::display_group {
 
     std::mutex state_mutex;
     state_t state;
+#ifdef _WIN32
+    std::optional<vdisplay_extend::snapshot_t> ended_before;  ///< From end() to restore()
+#endif
 
     std::string id_of(const state_t &s) {
       return s.declaration ? s.declaration->id : std::string {};
@@ -244,6 +247,7 @@ namespace fork_tweaks::display_group {
     std::lock_guard lock {state_mutex};
     state = {};
 #ifdef _WIN32
+    ended_before.reset();
     state.before = vdisplay_extend::snapshot();
     BOOST_LOG(info) << "fork: display group: the displays on before the group: "sv << extend_layout::describe(state.before->topology);
 #endif
@@ -449,9 +453,6 @@ namespace fork_tweaks::display_group {
   void end() {
     std::vector<std::shared_ptr<stream::session_t>> sessions;
     std::vector<slot_entry_t> slots;
-#ifdef _WIN32
-    std::optional<vdisplay_extend::snapshot_t> before;
-#endif
     {
       std::lock_guard lock {state_mutex};
       if (!state.active
@@ -465,7 +466,7 @@ namespace fork_tweaks::display_group {
       sessions = take_slot_sessions();
       slots = std::move(state.slots);
 #ifdef _WIN32
-      before = std::move(state.before);
+      ended_before = std::move(state.before);
 #endif
       state = {};
     }
@@ -473,8 +474,19 @@ namespace fork_tweaks::display_group {
 
 #ifdef _WIN32
     remove_displays(slots);
+#endif
+  }
 
-    // The PC's displays as they were before the group; slot 0's display goes after this
+  void restore() {
+#ifdef _WIN32
+    std::optional<vdisplay_extend::snapshot_t> before;
+    {
+      std::lock_guard lock {state_mutex};
+      before = std::move(ended_before);
+      ended_before.reset();
+    }
+
+    // The PC's displays as they were before the group, now that no group display is connected
     if (before && !before->topology.empty()) {
       auto device = make_device();
       BOOST_LOG(info) << "fork: display group: switching on "sv << extend_layout::describe(before->topology) << " again"sv;
