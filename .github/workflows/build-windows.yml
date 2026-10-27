@@ -190,6 +190,22 @@ jobs:
           $nodeDir = Split-Path (Get-Command node).Source
           "NODE_DIR=$nodeDir" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      # The app covers' labels need Segoe UI Semibold, which only Windows has, so a new or redrawn
+      # cover (scripts/fork/icons) is taken from this run's `covers` artifact and committed.
+      - name: Render the app covers
+        shell: pwsh
+        working-directory: scripts/fork/icons
+        run: |
+          npm install --no-audit --no-fund
+          node build.js "$env:RUNNER_TEMP/covers"
+
+      - name: Upload the app covers
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
+        with:
+          name: covers
+          path: ${{ runner.temp }}/covers/src_assets/common/assets/*.png
+          if-no-files-found: error
+
       # Boost is left out on purpose: the build needs exactly 1.89.0 and fetches it itself.
       - name: Setup MSYS2
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2.33.0
