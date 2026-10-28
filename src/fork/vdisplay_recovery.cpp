@@ -197,6 +197,10 @@ namespace fork_tweaks::vdisplay_recovery {
         off_since.reset();
       }
 
+      // The client's screen as the primary display, if Windows didn't take that at the launch or
+      // resume (a locked session; fork/vdisplay_primary_policy.h)
+      proc::proc.retry_virtual_primary();
+
       // Capture stays on another display it fell back to until it restarts
       auto on = captured();
       bool should_follow = !on.empty() && proc::proc.stream_display() == name;

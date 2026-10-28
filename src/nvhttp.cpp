@@ -38,6 +38,7 @@
 #include "fork/mac_drive.h"  // [fork]
 #include "fork/touch_emulation.h"  // [fork]
 #include "fork/updater.h"  // [fork]
+#include "fork/vdisplay_primary_policy.h"  // [fork]
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
@@ -527,6 +528,12 @@ namespace nvhttp {
 
     // [fork] LuzLunar's Mac trackpad mode, which the stream turns on if this host offers it
     launch_session->mac_trackpad = get_arg(args, "luzTrackpad", "") == "mac"sv;
+
+    // [fork] LuzLunar asks for its screen to be the primary display (the Virtual Display app)
+    launch_session->client_primary = vdisplay_primary_policy::requested(get_arg(args, vdisplay_primary_policy::k_arg, ""));
+    if (launch_session->client_primary) {
+      BOOST_LOG(info) << "Client ["sv << launch_session->device_name << "] asks for its screen to be the primary display ("sv << vdisplay_primary_policy::k_arg << "=1)"sv;
+    }
 
     // [fork] LuzLunar's own bitrate, below the one it launches with (fork/adaptive_bitrate.h)
     launch_session->luz_bitrate_kbps = fork_tweaks::adaptive_bitrate::parse_start_kbps(get_arg(args, "luzBitrate", "")).value_or(0);

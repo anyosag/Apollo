@@ -31,6 +31,7 @@
 #include "fork/client_display.h"
 #include "fork/display_group.h"  // [fork]
 #include "fork/vdisplay_mode.h"
+#include "fork/vdisplay_primary_policy.h"  // [fork]
 #include "fork/vdisplay_recovery.h"
 #include "platform/common.h"
 #include "rtsp.h"
@@ -202,6 +203,11 @@ namespace proc {
      * renamed it. Gives it its mode, layout and HDR state again if they changed. With the lock held.
      */
     void virtual_display_back(const std::string &name, bool was_off);
+
+    /// [fork] Makes the client's screen the primary display once Windows takes display changes again,
+    /// after a launch or resume that asked for it while it didn't (fork/vdisplay_primary_policy.h).
+    /// For the recovery monitor, with the lock held.
+    void retry_virtual_primary();
 #endif
 
   private:
@@ -262,6 +268,11 @@ namespace proc {
     std::string _vdisplay_id;
     vdisplay_mode::display_mode_t _vdisplay_mode {};
     std::unique_ptr<fork_tweaks::vdisplay_recovery::monitor_t> _vdisplay_recovery;
+
+    /// [fork] The extended desktop's primary display: the client's screen if it asks, else the PC's
+    /// @p pc_primary again (fork/vdisplay_extend.h), and the retry when Windows doesn't take it now
+    void settle_virtual_primary(const std::string &pc_primary, bool client_primary);
+    vdisplay_primary_policy::retry_t _vdisplay_primary_retry;
 
     void start_vdisplay_recovery();
     void stop_vdisplay_recovery();
