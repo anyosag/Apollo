@@ -72,6 +72,10 @@ namespace rtsp_stream {
     /// [fork] LuzLunar asked for its Mac trackpad mode (luzTrackpad=mac, fork/pointer_speed.h)
     bool mac_trackpad = false;
 
+    /// [fork] LuzLunar asked for its screen to be Windows' primary display while the Virtual Display
+    /// app extends the desktop (luzPrimary=1, fork/vdisplay_primary_policy.h)
+    bool client_primary = false;
+
     /// [fork] LuzLunar's own bitrate in kbps (luzBitrate=N), which the encoder starts at: it launched a quarter above it
     /// to leave room to raise it (fork/adaptive_bitrate.h); 0 from other clients
     std::int64_t luz_bitrate_kbps = 0;

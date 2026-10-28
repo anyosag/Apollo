@@ -730,7 +730,24 @@ namespace proc {
       // display_device then configures whichever display is primary
       BOOST_LOG(warning) << "vdisplay: display_device doesn't list "sv << _vdisplay_name << " yet"sv;
     }
+
+    // [fork] The extended desktop's primary display: the client's screen if it asks, else the PC's
+    // primary display of before again
+    if (extend_from) {
+      settle_virtual_primary(extend_from->primary, _launch_session && _launch_session->client_primary);
+    }
     return true;
+  }
+
+  // [fork] fork/vdisplay_extend.h decides; a client that asks gets another try (retry_virtual_primary())
+  // when Windows doesn't take it now
+  void proc_t::settle_virtual_primary(const std::string &pc_primary, bool client_primary) {
+    auto settled = fork_tweaks::vdisplay_extend::settle_primary(pc_primary, _vdisplay_id, client_primary);
+    if (settled.pending) {
+      _vdisplay_primary_retry.arm(std::chrono::steady_clock::now(), settled.displaced);
+    } else {
+      _vdisplay_primary_retry.disarm();
+    }
   }
 
   // [fork] The HDR workaround from execute(): Windows doesn't set HDR correctly right after a
@@ -782,6 +799,10 @@ namespace proc {
     if (!virtual_display || _vdisplay_name.empty() || !_launch_session || vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
       return vdisplay_change_e::unchanged;
     }
+
+    // [fork] What the client asks of the primary display now, also for a display re-created below or
+    // later by the recovery monitor
+    _launch_session->client_primary = session.client_primary;
 
     auto start = std::chrono::steady_clock::now();
     VDISPLAY::takeModeStats();
@@ -908,6 +929,12 @@ namespace proc {
       }
     }
 
+    // [fork] The client's screen as the primary display at each resume that asks for it (a re-created
+    // display was settled as it arrived); one that doesn't ask hands nothing back
+    if (extends_desktop() && (result == vdisplay_change_e::unchanged || result == vdisplay_change_e::mode_changed)) {
+      settle_virtual_primary({}, session.client_primary);
+    }
+
     auto stats = VDISPLAY::takeModeStats();
     BOOST_LOG(info) << "vdisplay: resume handled in "sv << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count()
                     << " ms, "sv << stats.mode_sets << " mode changes, "sv << stats.hdr_changes << " HDR switches"sv;
@@ -986,6 +1013,41 @@ namespace proc {
     }
     VDISPLAY::takeModeStats();
     return replug_virtual_display(_vdisplay_mode, *_launch_session, "the virtual display didn't come back") == vdisplay_change_e::replugged;
+  }
+
+  void proc_t::retry_virtual_primary() {
+    auto now = std::chrono::steady_clock::now();
+    if (!_vdisplay_primary_retry.due(now)) {
+      return;
+    }
+    if (!virtual_display || !extends_desktop()) {
+      _vdisplay_primary_retry.disarm();
+      return;
+    }
+
+    // The primary display isn't read while Windows doesn't take changes: nothing is tried then
+    bool blocked = is_changing_settings_going_to_fail();
+    auto primary_now = blocked ? std::string {} : fork_tweaks::vdisplay_extend::primary();
+    switch (_vdisplay_primary_retry.step(now, blocked, _vdisplay_id, primary_now)) {
+      case vdisplay_primary_policy::retry_e::apply:
+        // Its own log line says how it went; a failure is tried again
+        fork_tweaks::vdisplay_extend::settle_primary({}, _vdisplay_id, true);
+        break;
+      case vdisplay_primary_policy::retry_e::done:
+        if (_vdisplay_primary_retry.tries() == 0) {
+          BOOST_LOG(info) << "vdisplay: "sv << _vdisplay_id << " is the primary display now, as Windows saved it"sv;
+        }
+        break;
+      case vdisplay_primary_policy::retry_e::user_chose:
+        BOOST_LOG(info) << "vdisplay: "sv << primary_now << " is the primary display now, not the client's "sv << _vdisplay_id << "; left as it is"sv;
+        break;
+      case vdisplay_primary_policy::retry_e::give_up:
+        BOOST_LOG(warning) << "vdisplay: Windows didn't make "sv << _vdisplay_id << " the primary display after "sv << _vdisplay_primary_retry.tries() << " tries; left as it is"sv;
+        break;
+      case vdisplay_primary_policy::retry_e::none:
+      case vdisplay_primary_policy::retry_e::wait:
+        break;
+    }
   }
 
   void proc_t::virtual_display_back(const std::string &name, bool was_off) {
@@ -1389,6 +1451,7 @@ namespace proc {
     _vdisplay_name.clear();
     _vdisplay_id.clear();
     _vdisplay_mode = {};
+    _vdisplay_primary_retry.disarm();  // [fork]
 #endif
     initial_display.clear();
     mode_changed_display.clear();
