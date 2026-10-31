@@ -15,6 +15,7 @@
 #include <winrt/windows.graphics.capture.h>
 
 // local includes
+#include "src/fork/cursor_capture.h"  // [fork]
 #include "src/platform/common.h"
 #include "src/utility.h"
 #include "src/video.h"
@@ -179,6 +180,10 @@ namespace platf::dxgi {
 
     std::unique_ptr<high_precision_timer> timer = create_high_precision_timer();
 
+    /// [fork] The last snapshot found only the pointer moved, for a client that draws it, so it
+    /// returned at once and the capture needn't rest before the next (fork/client_cursor.h)
+    bool fork_pointer_frame_skipped = false;
+
     typedef enum _D3DKMT_SCHEDULINGPRIORITYCLASS {
       D3DKMT_SCHEDULINGPRIORITYCLASS_IDLE,  ///< Idle priority class
       D3DKMT_SCHEDULINGPRIORITYCLASS_BELOW_NORMAL,  ///< Below normal priority class
@@ -308,6 +313,9 @@ namespace platf::dxgi {
 
     duplication_t dup;
     cursor_t cursor;
+
+    /// [fork] For LuzLunar, which can draw the pointer itself (fork/client_cursor.h)
+    fork_tweaks::client_cursor::capture_shape_t fork_shape;
   };
 
   /**
@@ -344,6 +352,9 @@ namespace platf::dxgi {
     texture2d_t old_surface_delayed_destruction;
     std::chrono::steady_clock::time_point old_surface_timestamp;
     std::variant<std::monostate, texture2d_t, std::shared_ptr<platf::img_t>> last_frame_variant;
+
+    /// [fork] For LuzLunar, which can draw the pointer itself (fork/client_cursor.h)
+    fork_tweaks::client_cursor::capture_shape_t fork_shape;
   };
 
   /**

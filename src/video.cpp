@@ -24,6 +24,7 @@ extern "C" {
 #include "cbs.h"
 #include "config.h"
 #include "display_device.h"
+#include "fork/client_cursor.h"  // [fork]
 #include "fork/cursor_position.h"
 #include "fork/display_group.h"  // [fork]
 #include "fork/encoder_probe_reuse.h"
@@ -1189,6 +1190,24 @@ namespace video {
     refresh_displays(dev_type, display_names, current_display_index, empty_str);
   }
 
+  /**
+   * @brief [fork] What a capture does with the pointer, for the streams it serves (fork/client_cursor.h):
+   * it draws it unless some draw it themselves, and leaves it out only when they all do.
+   * @param drawing The streams that draw it themselves.
+   * @param streams All the capture's streams.
+   */
+  static platf::fork_cursor_e fork_cursor_mode(int drawing, int streams) {
+    if (drawing == 0) {
+      return platf::fork_cursor_e::draw;
+    }
+    return drawing == streams ? platf::fork_cursor_e::tell : platf::fork_cursor_e::draw_and_tell;
+  }
+
+  /// [fork] The stream's client draws the pointer now
+  static bool fork_draws_cursor(const config_t &config) {
+    return config.fork_cursor && config.fork_cursor->draws.load();
+  }
+
   void captureThread(
     std::shared_ptr<safe::queue_t<capture_ctx_t>> capture_ctx_queue,
     sync_util::sync_t<std::weak_ptr<platf::display_t>> &display_wp,
@@ -1356,6 +1375,19 @@ namespace video {
     // Capture takes place on this thread
     platf::adjust_thread_priority(platf::thread_priority_e::critical);
 
+    // [fork] What this capture does with the pointer (fork/client_cursor.h): only the display with
+    // the pointer, not a display group's slot past 0, leaves it out for streams that draw it
+    auto fork_update_cursor_mode = [&]() {
+      if (!disp || fork_slot >= 1) {
+        return;
+      }
+      int drawing = 0;
+      for (auto &capture_ctx : capture_ctxs) {
+        drawing += fork_draws_cursor(capture_ctx.config) ? 1 : 0;
+      }
+      disp->fork_cursor = fork_cursor_mode(drawing, (int) capture_ctxs.size());
+    };
+
     while (capture_ctx_queue->running()) {
       bool artificial_reinit = false;
 
@@ -1382,6 +1414,8 @@ namespace video {
           capture_ctxs.emplace_back(std::move(*capture_ctx_queue->pop()));
         }
 
+        fork_update_cursor_mode();  // [fork] for the streams it serves now
+
         if (fork_slot < 1 && switch_display_event->peek()) {  // [fork] not a display group slot's
           artificial_reinit = true;
           return false;
@@ -1390,6 +1424,7 @@ namespace video {
         return true;
       };
 
+      fork_update_cursor_mode();  // [fork] before its first snapshot
       auto status = disp->capture(push_captured_image_callback, pull_free_image_callback, &display_cursor);
 
       if (artificial_reinit && status != platf::capture_e::error) {
@@ -1422,9 +1457,9 @@ namespace video {
                   continue;
                 }
 
-                while (capture_ctx->images->peek()) {
-                  capture_ctx->images->pop();
-                }
+                // Never waits: the encoder can take the frame between a peek() and an untimed pop(),
+                // which then waited forever, as this thread is the only one raising frames (Sunshine #5249)
+                while (capture_ctx->images->pop(0ms)) {}
 
                 ++capture_ctx;
               });
@@ -2366,6 +2401,15 @@ namespace video {
       synced_sessions.emplace_back(std::move(*synced_session));
     }
 
+    // [fork] What this capture does with the pointer (fork/client_cursor.h)
+    auto fork_update_cursor_mode = [&]() {
+      int drawing = 0;
+      for (auto &ctx : synced_session_ctxs) {
+        drawing += fork_draws_cursor(ctx->config) ? 1 : 0;
+      }
+      disp->fork_cursor = fork_cursor_mode(drawing, (int) synced_session_ctxs.size());
+    };
+
     auto ec = platf::capture_e::ok;
     while (encode_session_ctx_queue.running()) {
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
@@ -2433,6 +2477,9 @@ namespace video {
           ++pos;
         })
 
+        // [fork] What the capture does with the pointer next, for the streams it serves now
+        fork_update_cursor_mode();
+
         if (switch_display_event->peek()) {
           ec = platf::capture_e::reinit;
           return false;
@@ -2447,6 +2494,7 @@ namespace video {
         return true;
       };
 
+      fork_update_cursor_mode();  // [fork] before its first snapshot
       auto status = disp->capture(push_captured_image_callback, pull_free_image_callback, &display_cursor);
       switch (status) {
         case platf::capture_e::reinit:

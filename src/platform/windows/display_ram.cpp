@@ -5,6 +5,7 @@
 // local includes
 #include "display.h"
 #include "misc.h"
+#include "src/fork/client_cursor.h"  // [fork]
 #include "src/fork/cursor_pulse.h"  // [fork]
 #include "src/logging.h"
 
@@ -173,6 +174,22 @@ namespace platf::dxgi {
     HRESULT status;
     DXGI_OUTDUPL_FRAME_INFO frame_info;
 
+    // [fork] LuzLunar draws the pointer itself while every stream of this capture does: it's left out
+    // of the picture, and the streams are told its shape and what's done with it (fork/client_cursor.h).
+    // Told at each snapshot, so a capture waiting for frames still counts.
+    const bool fork_tell = fork_cursor != platf::fork_cursor_e::draw;
+    auto fork_client_draws = [&]() {
+      if (!fork_tell) {
+        return false;
+      }
+      fork_shape.tell();
+      return fork_tweaks::cursor_shape_policy::client_draws(fork_cursor == platf::fork_cursor_e::tell, fork_shape.usable(), fork_tweaks::client_cursor::secure_desktop());
+    };
+    bool fork_left_out = fork_client_draws();
+    if (fork_tell) {
+      fork_tweaks::client_cursor::publish_capture(fork_left_out, cursor.visible, !cursor_visible);
+    }
+
     resource_t::pointer res_p {};
     auto capture_status = dup.next_frame(frame_info, timeout, &res_p);
     resource_t res {res_p};
@@ -207,12 +224,21 @@ namespace platf::dxgi {
 
         return capture_e::error;
       }
+
+      // [fork] Kept for LuzLunar, which can draw the pointer itself
+      fork_shape.seen(cursor.shape_info.Type, img_data.data(), img_data.size(), cursor.shape_info.Width, cursor.shape_info.Height, cursor.shape_info.Pitch, cursor.shape_info.HotSpot.x, cursor.shape_info.HotSpot.y);
     }
 
     if (frame_info.LastMouseUpdateTime.QuadPart) {
       cursor.x = frame_info.PointerPosition.Position.x;
       cursor.y = frame_info.PointerPosition.Position.y;
       cursor.visible = frame_info.PointerPosition.Visible;
+    }
+
+    // [fork] Again, with this frame's shape and position
+    fork_left_out = fork_client_draws();
+    if (fork_tell) {
+      fork_tweaks::client_cursor::publish_capture(fork_left_out, cursor.visible, !cursor_visible);
     }
 
     if (frame_update_flag) {
@@ -305,7 +331,7 @@ namespace platf::dxgi {
       img_info.pData = nullptr;
     }
 
-    if (cursor_visible && cursor.visible) {
+    if (cursor_visible && cursor.visible && !fork_left_out) {  // [fork] fork_left_out
       blend_cursor(cursor, *img);
     }
 

@@ -4,8 +4,10 @@
  */
 
 // standard includes
+#include <deque>
 #include <fstream>
 #include <future>
+#include <mutex>
 #include <queue>
 
 // lib includes
@@ -24,10 +26,14 @@ extern "C" {
 #include "control_packet.h"
 #include "crypto.h"
 #include "display_device.h"
+#include "fork/client_cursor.h"  // [fork]
 #include "fork/display_group.h"  // [fork]
 #include "fork/fork_config.h"
 #include "fork/frame_loss.h"
+#include "fork/luzcursor.h"
+#include "fork/luzmic.h"  // [fork]
 #include "fork/luztouchpad.h"
+#include "fork/mic.h"  // [fork]
 #include "fork/nv_stream.h"
 #include "globals.h"
 #include "input.h"
@@ -310,8 +316,13 @@ namespace stream {
     }
 
     int send(const std::string_view &payload, net::peer_t peer) {
+      return send(payload, peer, 0);  // [fork] the channel
+    }
+
+    /// [fork] Reliable on another ENet channel, as the fork's own messages are (send_fork_now())
+    int send(const std::string_view &payload, net::peer_t peer, std::uint8_t channel) {
       auto packet = enet_packet_create(payload.data(), payload.size(), ENET_PACKET_FLAG_RELIABLE);
-      if (enet_peer_send(peer, 0, packet)) {
+      if (enet_peer_send(peer, channel, packet)) {
         enet_packet_destroy(packet);
 
         return -1;
@@ -439,6 +450,21 @@ namespace stream {
     /// [fork] LuzLunar asked for its Mac trackpad mode
     bool mac_trackpad = false;
 
+    /// [fork] The fork's own control messages, waiting for the control stream thread
+    /// (session::send_fork_message())
+    struct fork_message_t {
+      std::uint16_t type;
+      std::uint8_t channel;
+      std::string payload;
+    };
+
+    std::mutex fork_messages_mutex;
+    std::deque<fork_message_t> fork_messages;
+
+    /// [fork] LuzLunar's Mac microphone, when the stream has it (fork/mic.h): set before the control
+    /// stream sees the session, stopped by join(), gone with the session
+    std::shared_ptr<fork_mic::session_t> mic;
+
     /// [fork] LuzLunar brings its Mac's camera (luzCamera=1, fork/camera.h)
     bool luz_camera = false;
   };
@@ -449,13 +475,9 @@ namespace stream {
    * returns empty string_view on failure
    * returns string_view pointing to payload data
    */
-  template<std::size_t max_payload_size>
-  static inline std::string_view encode_control(session_t *session, const std::string_view &plaintext, std::array<std::uint8_t, max_payload_size> &tagged_cipher) {
-    static_assert(
-      max_payload_size >= sizeof(control_encrypted_t) + sizeof(crypto::cipher::tag_size),
-      "max_payload_size >= sizeof(control_encrypted_t) + sizeof(crypto::cipher::tag_size)"
-    );
-
+  // [fork] encode_control()'s work, into a buffer of sizeof(control_encrypted_t) +
+  // round_to_pkcs7_padded(plaintext.size()) + tag_size bytes, for encode_control_fork() too
+  static inline std::string_view encode_control_into(session_t *session, const std::string_view &plaintext, std::uint8_t *tagged_cipher) {
     if (session->config.controlProtocolType != 13) {
       return plaintext;
     }
@@ -483,7 +505,7 @@ namespace stream {
       iv[0] = (std::uint8_t) seq;
     }
 
-    auto packet = (control_encrypted_p) tagged_cipher.data();
+    auto packet = (control_encrypted_p) tagged_cipher;
 
     auto bytes = session->control.cipher.encrypt(plaintext, packet->payload(), &iv);
     if (bytes <= 0) {
@@ -497,7 +519,73 @@ namespace stream {
     packet->length = util::endian::little(packet_length);
     packet->seq = util::endian::little(seq);
 
-    return std::string_view {(char *) tagged_cipher.data(), packet_length + sizeof(control_encrypted_t) - sizeof(control_encrypted_t::seq)};
+    return std::string_view {(char *) tagged_cipher, packet_length + sizeof(control_encrypted_t) - sizeof(control_encrypted_t::seq)};
+  }
+
+  template<std::size_t max_payload_size>
+  static inline std::string_view encode_control(session_t *session, const std::string_view &plaintext, std::array<std::uint8_t, max_payload_size> &tagged_cipher) {
+    static_assert(
+      max_payload_size >= sizeof(control_encrypted_t) + sizeof(crypto::cipher::tag_size),
+      "max_payload_size >= sizeof(control_encrypted_t) + sizeof(crypto::cipher::tag_size)"
+    );
+
+    return encode_control_into(session, plaintext, tagged_cipher.data());  // [fork] its work moved there
+  }
+
+  /// [fork] encode_control() for a plaintext of any size, into a buffer sized for it
+  static inline std::string_view encode_control_fork(session_t *session, const std::string_view &plaintext, std::vector<std::uint8_t> &tagged_cipher) {
+    tagged_cipher.resize(sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(plaintext.size()) + crypto::cipher::tag_size);
+    return encode_control_into(session, plaintext, tagged_cipher.data());
+  }
+
+  /**
+   * @brief [fork] One of the fork's own control messages (session::send_fork_message()), from the
+   * control stream thread: a V2 header and the payload, encrypted, reliable on the channel.
+   */
+  static bool send_fork_now(session_t *session, std::uint16_t type, std::string_view payload, std::uint8_t channel) {
+    // The encrypted length is 16 bits, with the header, the sequence number and the tag in it
+    if (!session->control.peer || session->config.controlProtocolType != 13 || payload.size() > 65000) {
+      return false;
+    }
+    std::string plaintext(sizeof(control_header_v2) + payload.size(), '\0');
+    auto header = (control_header_v2 *) plaintext.data();
+    header->type = util::endian::little(type);
+    header->payloadLength = util::endian::little((std::uint16_t) payload.size());
+    std::copy(std::begin(payload), std::end(payload), std::begin(plaintext) + sizeof(control_header_v2));
+
+    std::vector<std::uint8_t> encrypted;
+    auto message = encode_control_fork(session, plaintext, encrypted);
+    if (message.empty()) {
+      return false;
+    }
+    return session->broadcast_ref->control_server.send(message, session->control.peer, channel) == 0;
+  }
+
+  /**
+   * @brief [fork] On the control stream thread, for a session with its peer: the pointer its client
+   * draws (fork/client_cursor.h), then the fork messages queued for it. True while the client draws
+   * the pointer, so the thread comes back sooner.
+   */
+  static bool send_fork_messages(session_t *session, std::chrono::steady_clock::time_point now) {
+    bool drawing = false;
+    if (auto &cursor = session->config.monitor.fork_cursor; cursor && cursor->draws.load()) {
+      drawing = true;
+      fork_tweaks::client_cursor::pump(*cursor, now, [session](std::uint16_t type, std::string_view payload) {
+        return send_fork_now(session, type, payload, luzcursor::k_channel);
+      });
+    }
+
+    std::deque<session_t::fork_message_t> queued;
+    {
+      std::lock_guard lock {session->fork_messages_mutex};
+      queued.swap(session->fork_messages);
+    }
+    for (auto &message : queued) {
+      if (!send_fork_now(session, message.type, message.payload, message.channel)) {
+        BOOST_LOG(warning) << "fork: couldn't send control message 0x"sv << util::hex(message.type).to_string_view() << " to client ["sv << session->device_name << ']';
+      }
+    }
+    return drawing;
   }
 
   int start_broadcast(broadcast_ctx_t &ctx);
@@ -949,6 +1037,22 @@ namespace stream {
     return 0;
   }
 
+  /**
+   * [fork] A frame of LuzLunar's Mac microphone (fork/luzmic.h) goes to the Steam Streaming
+   * Microphone, never to input: played when the stream has the microphone and the client still has
+   * the Microphone permission, dropped otherwise.
+   * @return True when the input packet was such a frame.
+   */
+  static bool fork_mic_frame(session_t *session, const std::vector<uint8_t> &plaintext) {
+    if (!luzmic::is_frame(plaintext.data(), plaintext.size())) {
+      return false;
+    }
+    if (session->mic && (session->permission & crypto::PERM::client_mic) != crypto::PERM::_no) {
+      fork_mic::receive(*session->mic, plaintext.data(), plaintext.size());
+    }
+    return true;
+  }
+
   void controlBroadcastThread(control_server_t *server) {
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
@@ -1042,6 +1146,9 @@ namespace stream {
         std::copy(payload.end() - 16, payload.end(), std::begin(iv));
       }
 
+      if (fork_mic_frame(session, plaintext)) {  // [fork]
+        return;
+      }
       input::passthrough(session->input, std::move(plaintext), session->permission);
     });
 
@@ -1158,6 +1265,9 @@ namespace stream {
       // IDX_INPUT_DATA callback will attempt to decrypt unencrypted data, therefore we need pass it directly
       if (type == packetTypes[IDX_INPUT_DATA]) {
         plaintext.erase(std::begin(plaintext), std::begin(plaintext) + 4);
+        if (fork_mic_frame(session, plaintext)) {  // [fork]
+          return;
+        }
         input::passthrough(session->input, std::move(plaintext), session->permission);
       } else {
         server->call(type, session, next_payload, true);
@@ -1174,6 +1284,7 @@ namespace stream {
     auto broadcast_shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     while (!shutdown_event->peek() && !broadcast_shutdown_event->peek()) {
       bool has_session_awaiting_peer = false;
+      bool fork_cursor_drawn = false;  // [fork] a client draws the pointer: come back sooner
 
       {
         auto lg = server->_sessions.lock();
@@ -1235,6 +1346,11 @@ namespace stream {
               send_hdr_mode(session, std::move(hdr_info));
             }
 
+            // [fork] The pointer a client draws, and the fork's other messages
+            if (send_fork_messages(session, now)) {
+              fork_cursor_drawn = true;
+            }
+
             // [fork] At most every 10 s, and only when the client reported losses
             if (auto line = session->frame_loss.take_summary(now, 10s)) {
               BOOST_LOG(info) << "fork: frame loss for client ["sv << session->device_name << "] "sv << *line;
@@ -1251,7 +1367,7 @@ namespace stream {
         break;
       }
 
-      server->iterate(150ms);
+      server->iterate(fork_cursor_drawn ? fork_tweaks::cursor_shape_policy::control_interval : 150ms);  // [fork] fork_cursor_drawn
     }
 
     // Let all remaining connections know the server is shutting down
@@ -1299,7 +1415,10 @@ namespace stream {
 
     auto &io = ctx.io_context;
 
-    udp::endpoint peer;
+    // One sender address per socket: a shared one could be written by the other socket's pending
+    // receive before its handler read it, sending audio to the video port or the other way round
+    // (Sunshine #6021)
+    std::array<udp::endpoint, 2> peers;
 
     std::array<char, 2048> buf[2];
     std::function<void(const boost::system::error_code, size_t)> recv_func[2];
@@ -1330,6 +1449,7 @@ namespace stream {
 
     auto recv_func_init = [&](udp::socket &sock, int buf_elem, std::map<av_session_id_t, message_queue_t> &peer_to_session) {
       recv_func[buf_elem] = [&, buf_elem](const boost::system::error_code &ec, size_t bytes) {
+        auto &peer = peers[buf_elem];
         auto fg = util::fail_guard([&]() {
           sock.async_receive_from(asio::buffer(buf[buf_elem]), peer, 0, recv_func[buf_elem]);
         });
@@ -1372,8 +1492,8 @@ namespace stream {
     recv_func_init(video_sock, 0, peer_to_video_session);
     recv_func_init(audio_sock, 1, peer_to_audio_session);
 
-    video_sock.async_receive_from(asio::buffer(buf[0]), peer, 0, recv_func[0]);
-    audio_sock.async_receive_from(asio::buffer(buf[1]), peer, 0, recv_func[1]);
+    video_sock.async_receive_from(asio::buffer(buf[0]), peers[0], 0, recv_func[0]);
+    audio_sock.async_receive_from(asio::buffer(buf[1]), peers[1], 0, recv_func[1]);
 
     while (!broadcast_shutdown_event->peek()) {
       io.run();
@@ -2112,6 +2232,11 @@ namespace stream {
         task_pool.cancel(force_kill);
       });
 
+      // [fork] The microphone's thread, which puts back the default recording device (fork/mic.h)
+      if (session.mic) {
+        fork_mic::stop(*session.mic);
+      }
+
       BOOST_LOG(debug) << "Waiting for video to end..."sv;
       session.videoThread.join();
       BOOST_LOG(debug) << "Waiting for audio to end..."sv;
@@ -2186,9 +2311,26 @@ namespace stream {
         input::enable_mac_trackpad(session.input, session.device_name);
       }
 
+      // [fork] Its client draws the pointer: the relative moves are added up for it (fork/client_cursor.h)
+      if (session.config.monitor.fork_cursor) {
+        input::enable_client_cursor(session.input, session.config.monitor.fork_cursor);
+      }
+
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
         return -1;
+      }
+
+      // [fork] LuzLunar lends the PC its Mac's microphone, if it may (fork/mic.h): before the
+      // control stream sees the session, which hands it the frames and sends the STATEs
+      if (session.config.fork_mic) {
+        if ((session.permission & crypto::PERM::client_mic) == crypto::PERM::_no) {
+          BOOST_LOG(info) << "fork: the client would lend its microphone, but lacks the Microphone permission"sv;
+        } else {
+          session.mic = fork_mic::start([&session](std::string payload) {
+            send_fork_message(session, luzmic::k_type_state, std::move(payload), luzmic::k_channel);
+          });
+        }
       }
 
       session.control.expected_peer_address = addr_string;
@@ -2252,6 +2394,22 @@ namespace stream {
     // [fork] fork/adaptive_bitrate.h
     std::shared_ptr<fork_tweaks::adaptive_bitrate::live_t> fork_bitrate(session_t &session) {
       return session.config.monitor.fork_bitrate;
+    }
+
+    // [fork] fork/client_cursor.h
+    std::shared_ptr<fork_tweaks::client_cursor::session_t> fork_cursor(session_t &session) {
+      return session.config.monitor.fork_cursor;
+    }
+
+    // [fork] Sent by the control stream thread (send_fork_messages())
+    bool send_fork_message(session_t &session, std::uint16_t type, std::string payload, std::uint8_t channel) {
+      if (type < luzcursor::k_type_first || type > luzcursor::k_type_last || channel >= CTRL_CHANNEL_COUNT ||
+          session.config.controlProtocolType != 13) {
+        return false;
+      }
+      std::lock_guard lock {session.fork_messages_mutex};
+      session.fork_messages.push_back({type, channel, std::move(payload)});
+      return true;
     }
 
     std::shared_ptr<session_t> alloc(config_t &config, rtsp_stream::launch_session_t &launch_session) {

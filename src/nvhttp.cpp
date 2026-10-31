@@ -30,13 +30,16 @@
 #include "fork/adaptive_bitrate.h"  // [fork]
 #include "fork/camera.h"  // [fork]
 #include "fork/clipboard_bundle.h"  // [fork]
+#include "fork/client_cursor.h"  // [fork]
 #include "fork/clipboard_files.h"  // [fork]
 #include "fork/cursor_position.h"  // [fork]
 #include "fork/debug_log.h"  // [fork]
 #include "fork/display_group.h"  // [fork]
 #include "fork/fork_config.h"  // [fork]
 #include "fork/host_sleep.h"  // [fork]
+#include "fork/luzmic.h"  // [fork]
 #include "fork/mac_drive.h"  // [fork]
+#include "fork/mic.h"  // [fork]
 #include "fork/touch_emulation.h"  // [fork]
 #include "fork/updater.h"  // [fork]
 #include "globals.h"
@@ -382,7 +385,7 @@ namespace nvhttp {
         named_cert_p->perm = (PERM)(util::get_non_string_json_value<uint32_t>(el, "perm", (uint32_t)PERM::_all)) & PERM::_all;
         if (named_cert_p->perm == PERM::_all_before_host_update || named_cert_p->perm == PERM::_all_before_client_drive || named_cert_p->perm == PERM::_all_before_host_sleep ||
             named_cert_p->perm == PERM::_all_before_client_pair || named_cert_p->perm == PERM::_all_before_host_log ||
-            named_cert_p->perm == PERM::_all_before_client_camera) {
+            named_cert_p->perm == PERM::_all_before_client_mic || named_cert_p->perm == PERM::_all_before_client_camera) {
           named_cert_p->perm = PERM::_all;  // [fork] a client with every permission keeps every permission
         }
         named_cert_p->enable_legacy_ordering = el.value("enable_legacy_ordering", true);
@@ -529,6 +532,15 @@ namespace nvhttp {
 
     // [fork] LuzLunar's Mac trackpad mode, which the stream turns on if this host offers it
     launch_session->mac_trackpad = get_arg(args, "luzTrackpad", "") == "mac"sv;
+
+    // [fork] LuzLunar draws the pointer itself, if this host lets it (fork/client_cursor.h): now, or
+    // once it asks
+    auto luz_cursor = get_arg(args, "luzCursor", "");
+    launch_session->luz_cursor = luz_cursor == "1"sv || luz_cursor == "host"sv;
+    launch_session->luz_cursor_draws = luz_cursor == "1"sv;
+
+    // [fork] LuzLunar lends the PC its Mac's microphone (fork/mic.h), if this host offers it
+    launch_session->luz_mic = get_arg(args, "luzMic", "") == "1"sv;
 
     // [fork] LuzLunar's camera on this PC while the stream runs (fork/camera.h)
     launch_session->luz_camera = get_arg(args, luzcamera::k_launch_arg, "") == "1"sv;
@@ -720,9 +732,8 @@ namespace nvhttp {
       named_cert_p->allow_client_commands = true;
       named_cert_p->always_use_virtual_display = false;
 
-      auto it = map_id_sess.find(client.uniqueID);
-      map_id_sess.erase(it);
-
+      // The session goes with remove_session() below. Erasing it here too freed `sess` (and `client`)
+      // before that read them (Apollo #1481)
       add_authorized_client(named_cert_p);
     } else {
       tree.put("root.paired", 0);
@@ -837,7 +848,11 @@ namespace nvhttp {
         sess.address = net::addr_to_normalized_string(request->remote_endpoint().address());  // [fork]
 
         BOOST_LOG(debug) << sess.client.cert;
-        auto ptr = map_id_sess.emplace(sess.client.uniqueID, std::move(sess)).first;
+        // [fork] A device starting over replaces its old session. There's no /unpair, so a failed attempt's
+        // session lingered until it expired, and keeping it failed the retry "Out of order" (and used
+        // up a correct OTP)
+        auto unique_id = sess.client.uniqueID;
+        auto ptr = map_id_sess.insert_or_assign(std::move(unique_id), std::move(sess)).first;
 
         ptr->second.async_insert_pin.salt = std::move(get_arg(args, "salt"));
 
@@ -889,6 +904,8 @@ namespace nvhttp {
           std::getline(std::cin, pin);
 
           getservercert(ptr->second, tree, pin);
+          // [fork] Its answer, not the lookup below by the uniqueid moved into the session
+          return;
         } else {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
           system_tray::update_tray_require_pin();
@@ -936,18 +953,22 @@ namespace nvhttp {
 
   /// [fork] pin()'s answer to the device waiting for the PIN, with pair_mutex held
   static bool answer_pin(pair_session_t &sess, const std::string &pin, const std::string &name) {
-    pt::ptree tree;
-    getservercert(sess, tree, pin);
-
     if (!name.empty()) {
       sess.client.name = name;
     }
+
+    // The waiting request's response is taken out first: a failing getservercert() removes the
+    // session (fail_pair()), and `sess` with it
+    auto async_response = sess.async_insert_pin.response;
+    sess.async_insert_pin.response = std::decay_t<decltype(async_response.left())>();
+
+    pt::ptree tree;
+    getservercert(sess, tree, pin);
 
     // response to the request for pin
     std::ostringstream data;
     pt::write_xml(data, tree);
 
-    auto &async_response = sess.async_insert_pin.response;
     if (async_response.has_left() && async_response.left()) {
       async_response.left()->write(data.str());
     } else if (async_response.has_right() && async_response.right()) {
@@ -956,8 +977,6 @@ namespace nvhttp {
       return false;
     }
 
-    // reset async_response
-    async_response = std::decay_t<decltype(async_response.left())>();
     // response to the current request
     return true;
   }
@@ -1092,7 +1111,9 @@ namespace nvhttp {
       tree.put("root.LuzSleep", fork_tweaks::host_sleep::supported() ? 1 : 0);  // [fork] /actions/sleep works
       tree.put("root.LuzBitrate", fork_tweaks::adaptive_bitrate::supported() ? 1 : 0);  // [fork] /actions/bitrate works
       tree.put("root.LuzBitrateStart", fork_tweaks::adaptive_bitrate::supported() ? 1 : 0);  // [fork] and the stream starts at luzBitrate
-      tree.put("root.LuzCursor", fork_tweaks::cursor_position::supported() ? 1 : 0);  // [fork] /actions/cursor works
+      // [fork] 1: /actions/cursor works; 2: and the client can draw the pointer (luzcursor.h)
+      tree.put("root.LuzCursor", !fork_tweaks::cursor_position::supported() ? 0 : fork_tweaks::client_cursor::enabled() ? luzcursor::k_serverinfo_version : 1);
+      tree.put("root.LuzMic", fork_mic::enabled() ? luzmic::k_serverinfo_version : 0);  // [fork] luzMic=1 lends the PC the Mac's microphone (luzmic.h)
       tree.put("root.LuzDisplayGroup", fork_tweaks::display_group::max_slots());  // [fork] "Desktop (multiple displays)" runs, with up to this many slots
       tree.put("root.LuzDisplayGroupApp", fork_tweaks::display_group::app_id());  // [fork] its app id
       tree.put("root.LuzPairDevice", fork_tweaks::pair_from_client ? 1 : 0);  // [fork] /actions/pairdevice works

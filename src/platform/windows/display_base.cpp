@@ -308,7 +308,9 @@ namespace platf::dxgi {
           // To avoid starving the encoding thread, sleep without the lock held for a little
           // while each time we reach our max frame timeout. This will only happen when nothing
           // is updating the display, so no visible stutter should be introduced by the sleep.
-          std::this_thread::sleep_for(10ms);
+          if (!fork_pointer_frame_skipped) {  // [fork] that one didn't wait in AcquireNextFrame()
+            std::this_thread::sleep_for(10ms);
+          }
         }
       }
 
@@ -1055,8 +1057,12 @@ namespace platf {
       return {};
     }
 
-    dxgi::adapter_t adapter;
-    for (int x = 0; factory->EnumAdapters1(x, &adapter) != DXGI_ERROR_NOT_FOUND; ++x) {
+    // Each adapter is wrapped in turn, so it's released: enumerating into the same adapter_t
+    // overwrote the last one without releasing it (Sunshine #4340)
+    dxgi::adapter_t::pointer adapter_p {};
+    for (int x = 0; factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
+      dxgi::adapter_t adapter {adapter_p};
+
       DXGI_ADAPTER_DESC1 adapter_desc;
       adapter->GetDesc1(&adapter_desc);
 

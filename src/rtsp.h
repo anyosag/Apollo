@@ -72,6 +72,11 @@ namespace rtsp_stream {
     /// [fork] LuzLunar asked for its Mac trackpad mode (luzTrackpad=mac, fork/pointer_speed.h)
     bool mac_trackpad = false;
 
+    /// [fork] LuzLunar can draw the PC's pointer itself (fork/client_cursor.h): from the start with
+    /// luzCursor=1, or once it asks with luzCursor=host (POST /actions/cursor {"draw": "client"})
+    bool luz_cursor = false;
+    bool luz_cursor_draws = false;
+    bool luz_mic = false;  // [fork] LuzLunar lends the PC its Mac's microphone (luzMic=1, fork/mic.h)
     /// [fork] LuzLunar brings its Mac's camera to this stream (luzCamera=1, fork/camera.h)
     bool luz_camera = false;
 

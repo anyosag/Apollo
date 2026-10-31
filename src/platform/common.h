@@ -462,6 +462,14 @@ namespace platf {
     error  ///< Error
   };
 
+  /// [fork] What a capture does with the pointer now that LuzLunar can draw it itself
+  /// (fork/client_cursor.h); video.cpp's capture thread sets it between snapshots
+  enum class fork_cursor_e {
+    draw,  ///< Draws it into the picture, as upstream does
+    draw_and_tell,  ///< Draws it, and tells the streams that would draw it themselves so
+    tell,  ///< Every stream of it draws it: leaves it out when it can, and tells them its shape
+  };
+
   class display_t {
   public:
     /**
@@ -539,6 +547,9 @@ namespace platf {
     int env_width, env_height;
 
     int width, height;
+
+    /// [fork] Only Desktop Duplication's captures look at it
+    fork_cursor_e fork_cursor = fork_cursor_e::draw;
 
   protected:
     // collect capture timing data (at loglevel debug)

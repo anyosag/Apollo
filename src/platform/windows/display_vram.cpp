@@ -22,6 +22,7 @@ extern "C" {
 #include "display.h"
 #include "misc.h"
 #include "src/config.h"
+#include "src/fork/client_cursor.h"  // [fork]
 #include "src/fork/cursor_pulse.h"  // [fork]
 #include "src/logging.h"
 #include "src/nvenc/nvenc_config.h"
@@ -1152,9 +1153,26 @@ namespace platf::dxgi {
     HRESULT status;
     DXGI_OUTDUPL_FRAME_INFO frame_info;
 
+    // [fork] LuzLunar draws the pointer itself while every stream of this capture does: it's left out
+    // of the picture, and the streams are told its shape and what's done with it (fork/client_cursor.h).
+    // Told at each snapshot, so a capture waiting for frames still counts.
+    const bool fork_tell = fork_cursor != platf::fork_cursor_e::draw;
+    auto fork_client_draws = [&]() {
+      if (!fork_tell) {
+        return false;
+      }
+      fork_shape.tell();
+      return fork_tweaks::cursor_shape_policy::client_draws(fork_cursor == platf::fork_cursor_e::tell, fork_shape.usable(), fork_tweaks::client_cursor::secure_desktop());
+    };
+    bool fork_left_out = fork_client_draws();
+    if (fork_tell) {
+      fork_tweaks::client_cursor::publish_capture(fork_left_out, cursor_alpha.visible || cursor_xor.visible, !cursor_visible);
+    }
+    fork_pointer_frame_skipped = false;
+
     // [fork] While LuzLunar's cursor pulse runs, a frame goes out each time, with the cursor drawn
     // as the pulse has it now, even when nothing else changed (fork/cursor_pulse.h)
-    const bool fork_pulsing = cursor_visible && (cursor_alpha.visible || cursor_xor.visible) &&
+    const bool fork_pulsing = cursor_visible && !fork_left_out && (cursor_alpha.visible || cursor_xor.visible) &&
                               !std::holds_alternative<std::monostate>(last_frame_variant) && fork_tweaks::cursor_pulse::animating();
 
     resource_t::pointer res_p {};
@@ -1202,6 +1220,9 @@ namespace platf::dxgi {
       auto alpha_cursor_img = make_cursor_alpha_image(img_data, shape_info);
       auto xor_cursor_img = make_cursor_xor_image(img_data, shape_info);
 
+      // [fork] Kept for LuzLunar, which can draw the pointer itself
+      fork_shape.seen(shape_info.Type, std::begin(img_data), img_data.size(), shape_info.Width, shape_info.Height, shape_info.Pitch, shape_info.HotSpot.x, shape_info.HotSpot.y);
+
       // [fork] Kept for the pulse's tinted copy, with the hotspot it's drawn larger around
       fork_cursor_alpha_img.assign(std::begin(alpha_cursor_img), std::end(alpha_cursor_img));
       fork_cursor_alpha_pitch = 4 * shape_info.Width;
@@ -1222,7 +1243,19 @@ namespace platf::dxgi {
       cursor_xor.set_pos(frame_info.PointerPosition.Position.x, frame_info.PointerPosition.Position.y, width, height, display_rotation, frame_info.PointerPosition.Visible);
     }
 
-    const bool blend_mouse_cursor_flag = (cursor_alpha.visible || cursor_xor.visible) && cursor_visible;
+    // [fork] Again, with this frame's shape and position
+    fork_left_out = fork_client_draws();
+    if (fork_tell) {
+      fork_tweaks::client_cursor::publish_capture(fork_left_out, cursor_alpha.visible || cursor_xor.visible, !cursor_visible);
+    }
+
+    const bool blend_mouse_cursor_flag = (cursor_alpha.visible || cursor_xor.visible) && cursor_visible && !fork_left_out;  // [fork] fork_left_out
+
+    // [fork] Only the pointer moved, and the client draws it: there's no new picture to encode
+    if (fork_tweaks::cursor_shape_policy::skip_pointer_only_frame(fork_left_out, frame_update_flag, fork_pulsing, blend_mouse_cursor_flag, std::holds_alternative<std::shared_ptr<platf::img_t>>(last_frame_variant))) {
+      fork_pointer_frame_skipped = true;
+      return capture_e::timeout;
+    }
 
     texture2d_t src {};
     if (frame_update_flag) {

@@ -72,6 +72,9 @@ namespace fork_tweaks::cursor_position {
   /// The display the capture shows now (video.cpp, each time it sets one up)
   void set_display(const display_t &display);
 
+  /// The display set last (client_cursor.cpp)
+  display_t current_display();
+
   /// A paired client asking about its own stream
   struct client_t {
     std::string name;
@@ -92,6 +95,10 @@ namespace fork_tweaks::cursor_position {
    * @brief GET /actions/cursor: {"x", "y", "width", "height", "shown", "canPulse", "pulsing"} for the
    * client's own stream. POST {"pulse": N, "ifAtTop": bool, "reduceMotion": bool} answers the same
    * and pulses the cursor N times (0: settles it back now); with ifAtTop, only while it's at the top.
+   * canPulse is false while the client draws the pointer itself, which pulses it then.
+   * POST {"draw": "client"|"host"} says who draws the stream's pointer from now on (client_cursor.h)
+   * and answers {"draw"}; 409 {"error": "disabled"} with fork_client_cursor off, 409 {"error":
+   * "not_launched"} for a stream launched without luzCursor=1 (or a display group's slot past 0).
    * 403 without a stream, 503 while Windows won't say where the cursor is (a secure desktop has the input).
    */
   reply_t handle(const client_t &client, const std::string &method, const std::string &body);

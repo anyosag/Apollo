@@ -244,9 +244,9 @@ jobs:
             mingw-w64-ucrt-x86_64-zlib
             mingw-w64-ucrt-x86_64-ccache
 
-      # Fork code that doesn't need the rest of Apollo: the clipboard bundle and trackpad frames
-      # (shared with LuzLunar), a round trip through the real Windows clipboard, and gestures on a
-      # real synthetic touchpad; the last two skip if the runner has no clipboard or touchpads.
+      # Fork code that doesn't need the rest of Apollo: the clipboard bundle, trackpad frames, and the
+      # pointer's, the microphone's and the camera's messages (shared with LuzLunar), a round trip through the real
+      # Windows clipboard, and gestures on a real synthetic touchpad; the last two skip if the runner has no clipboard or touchpads.
       - name: Fork unit tests
         shell: msys2 {0}
         run: |
@@ -258,6 +258,12 @@ jobs:
           # Trackpad passthrough frames, also shared with LuzLunar (the same test runs in its CI)
           g++ -std=c++17 -Wall -Wextra -Isrc/fork tests/fork/luztouchpad_test.cpp -o luztouchpad_test
           ./luztouchpad_test
+          # The pointer LuzLunar draws itself: its messages and cache, also shared with LuzLunar
+          g++ -std=c++17 -Wall -Wextra -Isrc/fork tests/fork/luzcursor_test.cpp -o luzcursor_test
+          ./luzcursor_test
+          # The Mac's microphone: its frames and STATE, also shared with LuzLunar
+          g++ -std=c++17 -Wall -Wextra -Isrc/fork tests/fork/luzmic_test.cpp -o luzmic_test
+          ./luzmic_test
           # The Mac camera's protocol, also shared with LuzLunar (the same test runs in its CI)
           g++ -std=c++17 -Wall -Wextra -Isrc/fork tests/fork/luzcamera_test.cpp -o luzcamera_test
           ./luzcamera_test

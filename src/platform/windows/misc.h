@@ -14,7 +14,33 @@
 
 namespace platf {
   void print_status(const std::string_view &prefix, HRESULT status);
+
+  /**
+   * @brief Moves the calling thread to the input desktop, which it then keeps open while it's on it.
+   * @return The input desktop, for telling whether it changed since the last call (closed if the
+   * thread couldn't move to it), or nullptr if it couldn't be opened.
+   */
   HDESK syncThreadDesktop();
+
+  /**
+   * @brief [fork] Puts the calling thread on the input desktop until destroyed, then back on the
+   * desktop it was on (after Sunshine #5892). Windows' display configuration works only from a thread
+   * on the input desktop, which on the lock screen is Winlogon's, so display changes made under one
+   * work there too. Does nothing where Windows won't move the thread (one with windows or hooks) or
+   * the input desktop can't be opened (Apollo not running as SYSTEM).
+   */
+  class input_desktop_guard_t {
+  public:
+    input_desktop_guard_t();
+    ~input_desktop_guard_t();
+
+    input_desktop_guard_t(const input_desktop_guard_t &) = delete;
+    input_desktop_guard_t &operator=(const input_desktop_guard_t &) = delete;
+
+  private:
+    HDESK previous_desktop;
+    HDESK input_desktop;
+  };
 
   // [fork] Defined in misc.cpp; src/fork/touch_keyboard.cpp starts its helper as the signed-in user with them
   HANDLE retrieve_users_token(bool elevated);
