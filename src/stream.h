@@ -5,6 +5,7 @@
 #pragma once
 
 // standard includes
+#include <optional>  // [fork]
 #include <utility>
 
 // lib includes
@@ -80,5 +81,8 @@ namespace stream {
      * a type outside the range, a channel past 0x2F, or a control stream that isn't encrypted.
      */
     bool send_fork_message(session_t &session, std::uint16_t type, std::string payload, std::uint8_t channel);
+
+    /// [fork] The client's name when it launched with its camera (luzCamera=1, fork/camera.h); none otherwise
+    std::optional<std::string> fork_camera_client(const session_t &session);
   }  // namespace session
 }  // namespace stream

@@ -30,6 +30,12 @@ install(TARGETS apollo-updater RUNTIME DESTINATION "tools" COMPONENT application
 install(TARGETS apollo-touch-keyboard RUNTIME DESTINATION "tools" COMPONENT application)
 # [fork] Maps LuzLunar's Mac as a network drive (src/fork/mac_drive.cpp)
 install(TARGETS apollo-mac-drive RUNTIME DESTINATION "tools" COMPONENT application)
+# [fork] Mac Camera's media source and the tool that registers it (src/fork/camera.h), built with Visual Studio by
+# build-windows.yml (scripts/fork/build-camera.ps1); a build without them has no Mac Camera
+install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/camera/"
+        DESTINATION "tools"
+        COMPONENT application
+        OPTIONAL)
 
 # Drivers
 # [fork] LuzVDA (anyosag/LuzVDA): the scripts and certificate from the source tree, the signed driver

@@ -534,6 +534,7 @@
     "input_mouse": "Mouse Input",
     "input_kbd": "Keyboard Input",
     "client_mic": "Microphone",
+    "client_camera": "Camera",
     "clipboard_set": "Clipboard Set",
     "clipboard_read": "Clipboard Read",
     "file_upload": "File Upload",

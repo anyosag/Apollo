@@ -22,7 +22,8 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 
-// [fork] trackpad passthrough, and the pointer LuzLunar draws itself
+// [fork] trackpad passthrough, the pointer LuzLunar draws itself, and its Mac's microphone and camera
+#include "src/fork/camera.h"
 #include "src/fork/client_cursor.h"
 #include "src/fork/fork_config.h"
 #include "src/fork/luzcursor.h"
@@ -1821,6 +1822,11 @@ namespace platf {
     // [fork] LuzLunar can lend this PC its Mac's microphone (src/fork/mic.h)
     if (fork_mic::enabled()) {
       caps |= luzmic::k_host_feature_flag;
+    }
+
+    // [fork] LuzLunar's camera as this PC's "Mac Camera" (src/fork/camera.h)
+    if (fork_tweaks::camera::supported()) {
+      caps |= luzcamera::k_host_feature_flag;
     }
 
     return caps;

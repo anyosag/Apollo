@@ -464,6 +464,9 @@ namespace stream {
     /// [fork] LuzLunar's Mac microphone, when the stream has it (fork/mic.h): set before the control
     /// stream sees the session, stopped by join(), gone with the session
     std::shared_ptr<fork_mic::session_t> mic;
+
+    /// [fork] LuzLunar brings its Mac's camera (luzCamera=1, fork/camera.h)
+    bool luz_camera = false;
   };
 
   /**
@@ -2125,6 +2128,13 @@ namespace stream {
       return session.config.monitor.fork_capture_slot;
     }
 
+    std::optional<std::string> fork_camera_client(const session_t &session) {
+      if (!session.luz_camera) {
+        return std::nullopt;
+      }
+      return session.device_name;
+    }
+
     state_e state(session_t &session) {
       return session.state.load(std::memory_order_relaxed);
     }
@@ -2414,6 +2424,7 @@ namespace stream {
       session->permission = launch_session.perm;
       session->moonlight_ios = launch_session.moonlight_ios;  // [fork]
       session->mac_trackpad = launch_session.mac_trackpad;  // [fork]
+      session->luz_camera = launch_session.luz_camera;  // [fork]
 
       session->do_cmds = std::move(launch_session.client_do_cmds);
       session->undo_cmds = std::move(launch_session.client_undo_cmds);

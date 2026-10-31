@@ -141,6 +141,21 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
+      # Mac Camera (FORK.md, "Mac camera for LuzLunar"): its media source, which Windows' Frame Server loads,
+      # and the tool that registers it, built with Visual Studio and the Windows SDK (the virtual camera API)
+      # into src_assets/windows/camera/ for the installer. The self-test runs the source in this process, as
+      # Frame Server would, without Apollo: three frames of its own icon at each size.
+      - name: Build Mac Camera
+        shell: pwsh
+        run: |
+          scripts/fork/build-camera.ps1 -Version $env:BUILD_VERSION
+          & src_assets/windows/camera/apollo-camera.exe selftest
+          if ($LASTEXITCODE -eq 77) {
+            '::warning::The camera source self-test was skipped: this runner has no Media Foundation'
+          } elseif ($LASTEXITCODE -ne 0) {
+            throw "The camera source self-test failed with exit code $LASTEXITCODE"
+          }
+
       # The LuzVDA virtual display driver (anyosag/LuzVDA). Its CI builds it unsigned; its owner signs it on
       # their own PC and publishes the signed zip as a release. The source tree has only install.bat,
       # uninstall.bat and the public certificate; the driver comes from that release, pinned by SHA256.
@@ -229,9 +244,9 @@ jobs:
             mingw-w64-ucrt-x86_64-zlib
             mingw-w64-ucrt-x86_64-ccache
 
-      # Fork code that doesn't need the rest of Apollo: the clipboard bundle, trackpad frames, the
-      # pointer's messages and the microphone's (shared with LuzLunar), a round trip through the real Windows clipboard, and gestures on a
-      # real synthetic touchpad; the last two skip if the runner has no clipboard or touchpads.
+      # Fork code that doesn't need the rest of Apollo: the clipboard bundle, trackpad frames, and the
+      # pointer's, the microphone's and the camera's messages (shared with LuzLunar), a round trip through the real
+      # Windows clipboard, and gestures on a real synthetic touchpad; the last two skip if the runner has no clipboard or touchpads.
       - name: Fork unit tests
         shell: msys2 {0}
         run: |
@@ -249,6 +264,9 @@ jobs:
           # The Mac's microphone: its frames and STATE, also shared with LuzLunar
           g++ -std=c++17 -Wall -Wextra -Isrc/fork tests/fork/luzmic_test.cpp -o luzmic_test
           ./luzmic_test
+          # The Mac camera's protocol, also shared with LuzLunar (the same test runs in its CI)
+          g++ -std=c++17 -Wall -Wextra -Isrc/fork tests/fork/luzcamera_test.cpp -o luzcamera_test
+          ./luzcamera_test
           g++ -std=c++17 -Wall -DCLIPBUNDLE_WITH_ZLIB -Isrc/fork \
             tests/fork/clipboard_win_smoke.cpp src/fork/clipboard_win.cpp src/fork/clipbundle.cpp \
             -lz -lole32 -luser32 -o clipboard_win_smoke
@@ -443,6 +461,15 @@ jobs:
             }
           }
           "Both packages include the LuzVDA driver and the US - Mac keyboard layout: $($files -join ', ')"
+          # Mac Camera's tool and this build's media source, in tools\
+          $camera = 'tools\\apollo-camera\.exe', "tools\\apollo-camera-source-$([regex]::Escape($env:BUILD_VERSION))\.dll"
+          foreach ($package in 'Apollo-windows-installer.exe', 'Apollo-windows-portable.zip') {
+            $listing = 7z l "artifacts/$package"
+            foreach ($pattern in $camera) {
+              if (-not ($listing -match $pattern)) { throw "$package is missing $pattern" }
+            }
+          }
+          "Both packages include Mac Camera: tools\apollo-camera.exe and tools\apollo-camera-source-$env:BUILD_VERSION.dll"
 
       # Lets anyone check a downloaded installer came from this workflow:
       #   gh attestation verify Apollo-windows-installer.exe -R anyosag/Apollo

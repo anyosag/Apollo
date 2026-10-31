@@ -252,6 +252,7 @@
       input_mouse      = _input << 3,      // Allow mouse input
       input_kbd        = _input << 4,      // Allow keyboard input
       client_mic       = _input << 5,      // [fork] Allow lending this PC the client's microphone; not one of _all_inputs
+      client_camera    = _input << 6,      // [fork] Allow giving this PC the client's camera; not one of _all_inputs
       _all_inputs      = input_controller | input_touch | input_pen | input_mouse | input_kbd,
 
       _operation       = _input << 8,      // Operation permission group
@@ -276,7 +277,7 @@
 
       _default         = view | list,      // Default permissions for new clients
       _no              = 0,                // No permissions are granted
-      _all             = _all_inputs | _all_opeiations | _all_actions | client_pair | host_log | client_mic, // All current permissions
+      _all             = _all_inputs | _all_opeiations | _all_actions | client_pair | host_log | client_mic | client_camera, // All current permissions
     };
   */
 
@@ -287,8 +288,9 @@
     input_pen: 0x00000400,
     input_mouse: 0x00000800,
     input_kbd: 0x00001000,
-    _all_inputs: 0x00001F00,
     client_mic: 0x00002000,  // [fork]
+    client_camera: 0x00004000,  // [fork]
+    _all_inputs: 0x00001F00,
 
     // Operation permission group
     clipboard_set: 0x00010000,
@@ -313,7 +315,7 @@
     // Special permissions
     _default: 0x03000000,
     _no: 0x00000000,
-    _all: 0x1FFF3F00  // [fork] with client_pair, host_log and client_mic
+    _all: 0x1FFF7F00  // [fork] with client_pair, host_log, client_mic and client_camera
   };
 
   const permissionGroups = [
@@ -376,6 +378,9 @@
         suppressed_by: []
       }, {
         name: 'client_mic',  // [fork]
+        suppressed_by: []
+      }, {
+        name: 'client_camera',  // [fork]
         suppressed_by: []
       }
     ] },

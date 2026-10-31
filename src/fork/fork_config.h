@@ -87,6 +87,11 @@ namespace fork_tweaks {
   /// displays off while it runs (display_group.h).
   inline bool display_group_enabled = true;
 
+  /// `fork_camera`: "Mac Camera", a Windows 11 virtual camera that LuzLunar's Mac fills with its own
+  /// camera while an app on this PC uses it, for clients with the Camera permission (camera.h). Off,
+  /// Apollo removes the camera from Windows.
+  inline bool camera_enabled = true;
+
   /// `fork_pair_from_client`: a client with the "Pair other devices" permission can give Apollo the
   /// PIN of another device waiting to pair at a given address (POST /actions/pairdevice), as
   /// LuzLunar does for the iMac's Moonlight.

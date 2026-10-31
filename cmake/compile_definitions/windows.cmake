@@ -83,16 +83,20 @@ list(PREPEND PLATFORM_LIBRARIES
         D3DCompiler
         dwmapi
         dxgi
+        gdi32  # [fork] Mac Camera's placeholder text (src/fork/camera.cpp)
         iphlpapi
         ksuser
         libssp.a
         libstdc++.a
         libwinpthread.a
+        mfplat  # [fork] Mac Camera's H.264 decoder (src/fork/camera.cpp); FFmpeg's libraries have it too
+        mfuuid  # [fork] and Media Foundation's GUIDs
         minhook::minhook
         ntdll
         powrprof  # [fork] Sleep PC from LuzLunar (src/fork/host_sleep.cpp)
         setupapi
         shlwapi
+        strmiids  # [fork] ICodecAPI's IID, for the camera's decoder
         synchronization.lib
         userenv
         ws2_32
