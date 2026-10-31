@@ -1104,6 +1104,8 @@ namespace proc {
 #ifdef _WIN32
     // Not while the recovery monitor brings slot 0's display back
     std::lock_guard vdisplay_lock {vdisplay_mutex()};
+    // From the input desktop, so the group's displays change on the lock screen too (Sunshine #5892)
+    platf::input_desktop_guard_t input_desktop;
     // Without its displays, slot 0 streams alone; the other slots find no slot to join
     if (!display_group_app() || !virtual_display || !fork_tweaks::display_group::active()) {
       BOOST_LOG(warning) << "fork: display group: the app runs without its displays, so slot 0 streams alone"sv;
