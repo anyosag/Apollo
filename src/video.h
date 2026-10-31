@@ -18,6 +18,10 @@ extern "C" {
 
 struct AVPacket;
 
+namespace fork_tweaks::client_cursor {
+  struct session_t;  // [fork] fork/client_cursor.h
+}
+
 namespace video {
 
   /* Encoding configuration requested by remote client */
@@ -56,6 +60,10 @@ namespace video {
     /// [fork] The display group slot this stream shows (fork/display_group.h): past 0, its own
     /// display on a capture thread of its own; -1 outside a group
     int fork_capture_slot = -1;
+
+    /// [fork] The client draws the pointer itself (fork/client_cursor.h): the capture leaves it out
+    /// while every stream of the display does; null for a stream that doesn't
+    std::shared_ptr<fork_tweaks::client_cursor::session_t> fork_cursor;
   };
 
   platf::mem_type_e map_base_dev_type(AVHWDeviceType type);

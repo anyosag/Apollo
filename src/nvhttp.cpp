@@ -29,6 +29,7 @@
 #include "file_handler.h"
 #include "fork/adaptive_bitrate.h"  // [fork]
 #include "fork/clipboard_bundle.h"  // [fork]
+#include "fork/client_cursor.h"  // [fork]
 #include "fork/clipboard_files.h"  // [fork]
 #include "fork/cursor_position.h"  // [fork]
 #include "fork/debug_log.h"  // [fork]
@@ -527,6 +528,12 @@ namespace nvhttp {
 
     // [fork] LuzLunar's Mac trackpad mode, which the stream turns on if this host offers it
     launch_session->mac_trackpad = get_arg(args, "luzTrackpad", "") == "mac"sv;
+
+    // [fork] LuzLunar draws the pointer itself, if this host lets it (fork/client_cursor.h): now, or
+    // once it asks
+    auto luz_cursor = get_arg(args, "luzCursor", "");
+    launch_session->luz_cursor = luz_cursor == "1"sv || luz_cursor == "host"sv;
+    launch_session->luz_cursor_draws = luz_cursor == "1"sv;
 
     // [fork] LuzLunar's own bitrate, below the one it launches with (fork/adaptive_bitrate.h)
     launch_session->luz_bitrate_kbps = fork_tweaks::adaptive_bitrate::parse_start_kbps(get_arg(args, "luzBitrate", "")).value_or(0);
@@ -1094,7 +1101,8 @@ namespace nvhttp {
       tree.put("root.LuzSleep", fork_tweaks::host_sleep::supported() ? 1 : 0);  // [fork] /actions/sleep works
       tree.put("root.LuzBitrate", fork_tweaks::adaptive_bitrate::supported() ? 1 : 0);  // [fork] /actions/bitrate works
       tree.put("root.LuzBitrateStart", fork_tweaks::adaptive_bitrate::supported() ? 1 : 0);  // [fork] and the stream starts at luzBitrate
-      tree.put("root.LuzCursor", fork_tweaks::cursor_position::supported() ? 1 : 0);  // [fork] /actions/cursor works
+      // [fork] 1: /actions/cursor works; 2: and the client can draw the pointer (luzcursor.h)
+      tree.put("root.LuzCursor", !fork_tweaks::cursor_position::supported() ? 0 : fork_tweaks::client_cursor::enabled() ? luzcursor::k_serverinfo_version : 1);
       tree.put("root.LuzDisplayGroup", fork_tweaks::display_group::max_slots());  // [fork] "Desktop (multiple displays)" runs, with up to this many slots
       tree.put("root.LuzDisplayGroupApp", fork_tweaks::display_group::app_id());  // [fork] its app id
       tree.put("root.LuzPairDevice", fork_tweaks::pair_from_client ? 1 : 0);  // [fork] /actions/pairdevice works

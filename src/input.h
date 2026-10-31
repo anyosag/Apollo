@@ -12,6 +12,10 @@
 #include "thread_safe.h"
 #include "crypto.h"
 
+namespace fork_tweaks::client_cursor {
+  struct session_t;  // [fork] fork/client_cursor.h
+}
+
 namespace input {
   struct input_t;
 
@@ -41,6 +45,14 @@ namespace input {
    * @param device_name The client's name, for the log.
    */
   void enable_mac_trackpad(std::shared_ptr<input_t> &input, const std::string &device_name);
+
+  /**
+   * @brief [fork] The client draws the PC's pointer itself (fork/client_cursor.h): the relative
+   * moves injected for it are added up there, each with its move. Call before input arrives.
+   * @param input The client's input context.
+   * @param cursor The stream's side of it.
+   */
+  void enable_client_cursor(std::shared_ptr<input_t> &input, std::shared_ptr<fork_tweaks::client_cursor::session_t> cursor);
 
   struct touch_port_t: public platf::touch_port_t {
     int env_width, env_height;

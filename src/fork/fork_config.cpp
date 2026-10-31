@@ -74,5 +74,6 @@ namespace fork_tweaks {
     bool_option(vars, "fork_smooth_motion_half_cap", smooth_motion_half_cap);
     bool_option(vars, "fork_display_group", display_group_enabled);
     bool_option(vars, "fork_pair_from_client", pair_from_client);
+    bool_option(vars, "fork_client_cursor", client_drawn_cursor);
   }
 }  // namespace fork_tweaks
