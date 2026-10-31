@@ -308,7 +308,9 @@ namespace platf::dxgi {
           // To avoid starving the encoding thread, sleep without the lock held for a little
           // while each time we reach our max frame timeout. This will only happen when nothing
           // is updating the display, so no visible stutter should be introduced by the sleep.
-          std::this_thread::sleep_for(10ms);
+          if (!fork_pointer_frame_skipped) {  // [fork] that one didn't wait in AcquireNextFrame()
+            std::this_thread::sleep_for(10ms);
+          }
         }
       }
 

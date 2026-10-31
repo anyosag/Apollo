@@ -22,8 +22,10 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 
-// [fork] trackpad passthrough
+// [fork] trackpad passthrough, and the pointer LuzLunar draws itself
+#include "src/fork/client_cursor.h"
 #include "src/fork/fork_config.h"
+#include "src/fork/luzcursor.h"
 #include "src/fork/touchpad_win.h"
 
 #ifdef __MINGW32__
@@ -1807,6 +1809,11 @@ namespace platf {
       if (fork_tweaks::trackpad_mac) {
         caps |= luztouchpad::k_host_mac_trackpad_flag;
       }
+    }
+
+    // [fork] LuzLunar can draw the pointer itself (src/fork/client_cursor.h)
+    if (fork_tweaks::client_cursor::enabled()) {
+      caps |= luzcursor::k_host_feature_flag;
     }
 
     return caps;

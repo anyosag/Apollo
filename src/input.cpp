@@ -21,6 +21,7 @@ extern "C" {
 
 // local includes
 #include "config.h"
+#include "fork/client_cursor.h"  // [fork]
 #include "fork/display_group.h"  // [fork]
 #include "fork/fork_config.h"  // [fork]
 #include "fork/tablet_posture.h"  // [fork]
@@ -226,6 +227,9 @@ namespace input {
     /// Windows' pointer acceleration off while the stream runs
     bool fork_mac_trackpad = false;
     std::unique_ptr<fork_tweaks::pointer_speed::hold_t> fork_pointer_hold;
+
+    /// [fork] The client draws the pointer (enable_client_cursor()): its relative moves are added up
+    std::shared_ptr<fork_tweaks::client_cursor::session_t> fork_cursor;
   };
 
   /**
@@ -490,7 +494,11 @@ namespace input {
     }
 
     input->mouse_left_button_timeout = DISABLE_LEFT_BUTTON_DELAY;
-    platf::move_mouse(platf_input, util::endian::big(packet->deltaX), util::endian::big(packet->deltaY));
+    auto delta_x = util::endian::big(packet->deltaX);
+    auto delta_y = util::endian::big(packet->deltaY);
+    // [fork] Added up for a client that draws the pointer, with the move (fork/client_cursor.h)
+    auto counted = fork_tweaks::client_cursor::count_move(input->fork_cursor.get(), delta_x, delta_y);
+    platf::move_mouse(platf_input, delta_x, delta_y);
   }
 
   /**
@@ -683,6 +691,10 @@ namespace input {
   void enable_mac_trackpad(std::shared_ptr<input_t> &input, const std::string &device_name) {
     input->fork_mac_trackpad = true;
     input->fork_pointer_hold = std::make_unique<fork_tweaks::pointer_speed::hold_t>(device_name);
+  }
+
+  void enable_client_cursor(std::shared_ptr<input_t> &input, std::shared_ptr<fork_tweaks::client_cursor::session_t> cursor) {
+    input->fork_cursor = std::move(cursor);
   }
 
   void passthrough(std::shared_ptr<input_t> &input, PNV_ABS_MOUSE_MOVE_PACKET packet) {

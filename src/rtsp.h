@@ -72,6 +72,11 @@ namespace rtsp_stream {
     /// [fork] LuzLunar asked for its Mac trackpad mode (luzTrackpad=mac, fork/pointer_speed.h)
     bool mac_trackpad = false;
 
+    /// [fork] LuzLunar can draw the PC's pointer itself (fork/client_cursor.h): from the start with
+    /// luzCursor=1, or once it asks with luzCursor=host (POST /actions/cursor {"draw": "client"})
+    bool luz_cursor = false;
+    bool luz_cursor_draws = false;
+
     /// [fork] LuzLunar's own bitrate in kbps (luzBitrate=N), which the encoder starts at: it launched a quarter above it
     /// to leave room to raise it (fork/adaptive_bitrate.h); 0 from other clients
     std::int64_t luz_bitrate_kbps = 0;
