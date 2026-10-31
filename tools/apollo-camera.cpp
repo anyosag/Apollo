@@ -14,6 +14,7 @@
 #include <cfgmgr32.h>
 #include <initguid.h>
 #include <ks.h>
+#include <ksproxy.h>
 #include <ksmedia.h>
 #include <mfapi.h>
 #include <mferror.h>
