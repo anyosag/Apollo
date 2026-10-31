@@ -1457,9 +1457,9 @@ namespace video {
                   continue;
                 }
 
-                while (capture_ctx->images->peek()) {
-                  capture_ctx->images->pop();
-                }
+                // Never waits: the encoder can take the frame between a peek() and an untimed pop(),
+                // which then waited forever, as this thread is the only one raising frames (Sunshine #5249)
+                while (capture_ctx->images->pop(0ms)) {}
 
                 ++capture_ctx;
               });
