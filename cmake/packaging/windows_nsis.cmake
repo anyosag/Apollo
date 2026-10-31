@@ -30,6 +30,9 @@ SET(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
             nsExec::ExecToLog \
               'powershell.exe -NoProfile -ExecutionPolicy Bypass -File \\\"$INSTDIR\\\\drivers\\\\keyboard\\\\install.ps1\\\"'
         NoKeyboardLayout:
+        IfFileExists \\\"$INSTDIR\\\\tools\\\\apollo-camera.exe\\\" 0 NoCamera
+            nsExec::ExecToLog '\\\"$INSTDIR\\\\tools\\\\apollo-camera.exe\\\" register'
+        NoCamera:
         nsExec::ExecToLog '\\\"$INSTDIR\\\\scripts\\\\migrate-config.bat\\\"'
         nsExec::ExecToLog 'icacls \\\"$INSTDIR\\\\config\\\" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F /C /Q'
         nsExec::ExecToLog '\\\"$INSTDIR\\\\scripts\\\\add-firewall-rule.bat\\\"'
@@ -42,10 +45,15 @@ SET(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
 
 # Extra uninstall commands
 # Uninstall service
+# [fork] An uninstall someone runs removes Mac Camera; a silent one (an update's) keeps it for the new build
 set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
         "${CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS}
         nsExec::ExecToLog '\\\"$INSTDIR\\\\scripts\\\\delete-firewall-rule.bat\\\"'
         nsExec::ExecToLog '\\\"$INSTDIR\\\\scripts\\\\uninstall-service.bat\\\"'
+        IfSilent NoCameraRemoval
+        IfFileExists \\\"$INSTDIR\\\\tools\\\\apollo-camera.exe\\\" 0 NoCameraRemoval
+            nsExec::ExecToLog '\\\"$INSTDIR\\\\tools\\\\apollo-camera.exe\\\" unregister'
+        NoCameraRemoval:
         nsExec::ExecToLog '\\\"$INSTDIR\\\\sunshine.exe\\\" --restore-nvprefs-undo'
         MessageBox MB_YESNO|MB_ICONQUESTION \
             'Do you want to remove Virtual Gamepad?' \

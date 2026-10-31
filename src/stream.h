@@ -5,6 +5,7 @@
 #pragma once
 
 // standard includes
+#include <optional>  // [fork]
 #include <utility>
 
 // lib includes
@@ -65,5 +66,8 @@ namespace stream {
 
     /// [fork] The display group slot the session streams (fork/display_group.h); -1 outside a group
     int fork_slot(const session_t &session);
+
+    /// [fork] The client's name when it launched with its camera (luzCamera=1, fork/camera.h); none otherwise
+    std::optional<std::string> fork_camera_client(const session_t &session);
   }  // namespace session
 }  // namespace stream

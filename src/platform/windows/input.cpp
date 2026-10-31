@@ -23,6 +23,7 @@
 #include "src/platform/common.h"
 
 // [fork] trackpad passthrough
+#include "src/fork/camera.h"  // [fork]
 #include "src/fork/fork_config.h"
 #include "src/fork/touchpad_win.h"
 
@@ -1807,6 +1808,11 @@ namespace platf {
       if (fork_tweaks::trackpad_mac) {
         caps |= luztouchpad::k_host_mac_trackpad_flag;
       }
+    }
+
+    // [fork] LuzLunar's camera as this PC's "Mac Camera" (src/fork/camera.h)
+    if (fork_tweaks::camera::supported()) {
+      caps |= luzcamera::k_host_feature_flag;
     }
 
     return caps;

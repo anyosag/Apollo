@@ -28,6 +28,7 @@
 #include "atomic_file.h"
 #include "file_handler.h"
 #include "fork/adaptive_bitrate.h"  // [fork]
+#include "fork/camera.h"  // [fork]
 #include "fork/clipboard_bundle.h"  // [fork]
 #include "fork/clipboard_files.h"  // [fork]
 #include "fork/cursor_position.h"  // [fork]
@@ -380,7 +381,8 @@ namespace nvhttp {
         named_cert_p->display_mode = el.value("display_mode", "");
         named_cert_p->perm = (PERM)(util::get_non_string_json_value<uint32_t>(el, "perm", (uint32_t)PERM::_all)) & PERM::_all;
         if (named_cert_p->perm == PERM::_all_before_host_update || named_cert_p->perm == PERM::_all_before_client_drive || named_cert_p->perm == PERM::_all_before_host_sleep ||
-            named_cert_p->perm == PERM::_all_before_client_pair || named_cert_p->perm == PERM::_all_before_host_log) {
+            named_cert_p->perm == PERM::_all_before_client_pair || named_cert_p->perm == PERM::_all_before_host_log ||
+            named_cert_p->perm == PERM::_all_before_client_camera) {
           named_cert_p->perm = PERM::_all;  // [fork] a client with every permission keeps every permission
         }
         named_cert_p->enable_legacy_ordering = el.value("enable_legacy_ordering", true);
@@ -527,6 +529,9 @@ namespace nvhttp {
 
     // [fork] LuzLunar's Mac trackpad mode, which the stream turns on if this host offers it
     launch_session->mac_trackpad = get_arg(args, "luzTrackpad", "") == "mac"sv;
+
+    // [fork] LuzLunar's camera on this PC while the stream runs (fork/camera.h)
+    launch_session->luz_camera = get_arg(args, luzcamera::k_launch_arg, "") == "1"sv;
 
     // [fork] LuzLunar's own bitrate, below the one it launches with (fork/adaptive_bitrate.h)
     launch_session->luz_bitrate_kbps = fork_tweaks::adaptive_bitrate::parse_start_kbps(get_arg(args, "luzBitrate", "")).value_or(0);
@@ -1092,6 +1097,7 @@ namespace nvhttp {
       tree.put("root.LuzDisplayGroupApp", fork_tweaks::display_group::app_id());  // [fork] its app id
       tree.put("root.LuzPairDevice", fork_tweaks::pair_from_client ? 1 : 0);  // [fork] /actions/pairdevice works
       tree.put("root.LuzLog", 1);  // [fork] /actions/log works
+      tree.put("root.LuzCamera", fork_tweaks::camera::supported() ? 1 : 0);  // [fork] /actions/camera takes LuzLunar's camera
       tree.put("root.VirtualDisplayCapable", true);
       if (!!(named_cert_p->perm & PERM::_all_actions)) {
         tree.put("root.VirtualDisplayDriverReady", proc::vDisplayDriverStatus == VDISPLAY::DRIVER_STATUS::OK);
@@ -2289,6 +2295,22 @@ namespace nvhttp {
     https_server.resource["^/actions/pairdevice$"]["POST"] = forkPairDevice;  // [fork]
     https_server.resource["^/actions/log$"]["GET"] = forkLog;  // [fork]
     https_server.resource["^/actions/log$"]["POST"] = forkLog;  // [fork]
+    // [fork] LuzLunar's camera connection: a verified request asking to upgrade, taken over by fork/camera.cpp
+    https_server.on_upgrade = [](std::unique_ptr<SunshineHTTPS> &socket, req_https_t request) {
+      fork_tweaks::camera::request_t camera_request;
+      camera_request.path = request->path;
+      auto upgrade = request->header.find("Upgrade");
+      if (upgrade != request->header.end()) {
+        camera_request.upgrade = upgrade->second;
+      }
+      if (auto named_cert_p = get_verified_cert(request)) {
+        camera_request.verified = true;
+        camera_request.permitted = !!(named_cert_p->perm & PERM::client_camera);
+        camera_request.client_name = named_cert_p->name;
+        camera_request.client_uuid = named_cert_p->uuid;
+      }
+      fork_tweaks::camera::upgrade(std::move(socket), camera_request);
+    };
 
     https_server.config.reuse_address = true;
     https_server.config.address = net::af_to_any_address_string(address_family);

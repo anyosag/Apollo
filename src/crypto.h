@@ -51,7 +51,9 @@ namespace crypto {
     input_pen        = _input << 2,      // Allow pen input
     input_mouse      = _input << 3,      // Allow mouse input
     input_kbd        = _input << 4,      // Allow keyboard input
+    client_camera    = _input << 6,      // [fork] Allow giving this PC the client's camera (src/fork/camera.h); not one of _all_inputs, which are input packets
     _all_inputs      = input_controller | input_touch | input_pen | input_mouse | input_kbd,
+    _all_before_client_camera = 0x1FFF1F00,  // [fork] _all before client_camera; clients with it get client_camera too
 
     _operation       = _input << 8,      // Operation permission group
     clipboard_set    = _operation << 0,  // Allow set clipboard from client
@@ -80,7 +82,7 @@ namespace crypto {
 
     _default         = view | list,      // Default permissions for new clients
     _no              = 0,                // No permissions are granted
-    _all             = _all_inputs | _all_opeiations | _all_actions | client_pair | host_log, // All current permissions [fork] client_pair, host_log
+    _all             = _all_inputs | _all_opeiations | _all_actions | client_pair | host_log | client_camera, // All current permissions [fork] client_pair, host_log, client_camera
   };
 
   inline constexpr PERM
