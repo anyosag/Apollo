@@ -722,9 +722,8 @@ namespace nvhttp {
       named_cert_p->allow_client_commands = true;
       named_cert_p->always_use_virtual_display = false;
 
-      auto it = map_id_sess.find(client.uniqueID);
-      map_id_sess.erase(it);
-
+      // The session goes with remove_session() below. Erasing it here too freed `sess` (and `client`)
+      // before that read them (Apollo #1481)
       add_authorized_client(named_cert_p);
     } else {
       tree.put("root.paired", 0);
@@ -839,7 +838,11 @@ namespace nvhttp {
         sess.address = net::addr_to_normalized_string(request->remote_endpoint().address());  // [fork]
 
         BOOST_LOG(debug) << sess.client.cert;
-        auto ptr = map_id_sess.emplace(sess.client.uniqueID, std::move(sess)).first;
+        // [fork] A device starting over replaces its old session. There's no /unpair, so a failed attempt's
+        // session lingered until it expired, and keeping it failed the retry "Out of order" (and used
+        // up a correct OTP)
+        auto unique_id = sess.client.uniqueID;
+        auto ptr = map_id_sess.insert_or_assign(std::move(unique_id), std::move(sess)).first;
 
         ptr->second.async_insert_pin.salt = std::move(get_arg(args, "salt"));
 
@@ -891,6 +894,8 @@ namespace nvhttp {
           std::getline(std::cin, pin);
 
           getservercert(ptr->second, tree, pin);
+          // [fork] Its answer, not the lookup below by the uniqueid moved into the session
+          return;
         } else {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
           system_tray::update_tray_require_pin();
@@ -938,18 +943,22 @@ namespace nvhttp {
 
   /// [fork] pin()'s answer to the device waiting for the PIN, with pair_mutex held
   static bool answer_pin(pair_session_t &sess, const std::string &pin, const std::string &name) {
-    pt::ptree tree;
-    getservercert(sess, tree, pin);
-
     if (!name.empty()) {
       sess.client.name = name;
     }
+
+    // The waiting request's response is taken out first: a failing getservercert() removes the
+    // session (fail_pair()), and `sess` with it
+    auto async_response = sess.async_insert_pin.response;
+    sess.async_insert_pin.response = std::decay_t<decltype(async_response.left())>();
+
+    pt::ptree tree;
+    getservercert(sess, tree, pin);
 
     // response to the request for pin
     std::ostringstream data;
     pt::write_xml(data, tree);
 
-    auto &async_response = sess.async_insert_pin.response;
     if (async_response.has_left() && async_response.left()) {
       async_response.left()->write(data.str());
     } else if (async_response.has_right() && async_response.right()) {
@@ -958,8 +967,6 @@ namespace nvhttp {
       return false;
     }
 
-    // reset async_response
-    async_response = std::decay_t<decltype(async_response.left())>();
     // response to the current request
     return true;
   }

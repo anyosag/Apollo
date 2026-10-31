@@ -251,6 +251,20 @@ namespace platf {
   }
 
   HDESK syncThreadDesktop() {
+    // [fork] The thread keeps the desktop it's moved to and closes the one before (after Sunshine
+    // #5892). Windows won't close a desktop the thread is on, so closing it at once failed, leaking a
+    // handle at every call; input injection calls this often.
+    struct attached_desktop_t {
+      HDESK desktop = nullptr;
+
+      ~attached_desktop_t() {
+        if (desktop) {
+          CloseDesktop(desktop);
+        }
+      }
+    };
+    thread_local attached_desktop_t attached;
+
     auto hDesk = OpenInputDesktop(DF_ALLOWOTHERACCOUNTHOOK, FALSE, GENERIC_ALL);
     if (!hDesk) {
       auto err = GetLastError();
@@ -262,11 +276,40 @@ namespace platf {
     if (!SetThreadDesktop(hDesk)) {
       auto err = GetLastError();
       BOOST_LOG(error) << "Failed to sync desktop to thread [0x"sv << util::hex(err).to_string_view() << ']';
+
+      // Not the thread's desktop, so this one closes
+      CloseDesktop(hDesk);
+      return hDesk;
     }
 
-    CloseDesktop(hDesk);
+    if (attached.desktop) {
+      CloseDesktop(attached.desktop);
+    }
+    attached.desktop = hDesk;
 
     return hDesk;
+  }
+
+  input_desktop_guard_t::input_desktop_guard_t():
+      previous_desktop {GetThreadDesktop(GetCurrentThreadId())},
+      // Not without a desktop to come back to
+      input_desktop {previous_desktop ? OpenInputDesktop(DF_ALLOWOTHERACCOUNTHOOK, FALSE, GENERIC_ALL) : nullptr} {
+    if (input_desktop && !SetThreadDesktop(input_desktop)) {
+      CloseDesktop(input_desktop);
+      input_desktop = nullptr;
+    }
+  }
+
+  input_desktop_guard_t::~input_desktop_guard_t() {
+    if (!input_desktop) {
+      return;
+    }
+
+    if (!SetThreadDesktop(previous_desktop)) {
+      BOOST_LOG(warning) << "Couldn't move the thread back to its desktop [0x"sv << util::hex(GetLastError()).to_string_view() << ']';
+    }
+    // Fails, and leaves it open, while the thread is still on it
+    CloseDesktop(input_desktop);
   }
 
   void print_status(const std::string_view &prefix, HRESULT status) {

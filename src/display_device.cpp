@@ -25,10 +25,18 @@
   #include <display_device/windows/settings_manager.h>
   #include <display_device/windows/win_api_layer.h>
   #include <display_device/windows/win_display_device.h>
+
+  #include "platform/windows/misc.h"
 #endif
 
 namespace display_device {
   namespace {
+#ifdef _WIN32
+    /// Display changes from the input desktop, so they work on the lock screen too (Sunshine #5892)
+    using input_desktop_guard_t = platf::input_desktop_guard_t;
+#else
+    struct input_desktop_guard_t {};
+#endif
     constexpr std::chrono::milliseconds DEFAULT_RETRY_INTERVAL {5000};
 
     /**
@@ -656,6 +664,7 @@ namespace display_device {
       }
 
       DD_DATA.sm_instance->schedule([try_once = (option == revert_option_e::try_once), tried_out_devices = std::set<std::string> {}](auto &settings_iface, auto &stop_token) mutable {
+        [[maybe_unused]] const input_desktop_guard_t input_desktop {};
         if (try_once) {
           std::ignore = settings_iface.revertSettings();
           stop_token.requestStop();
@@ -720,6 +729,7 @@ namespace display_device {
       DD_DATA.sm_instance = std::make_unique<RetryScheduler<SettingsManagerInterface>>(std::move(settings_manager));
 
       const auto available_devices {DD_DATA.sm_instance->execute([](auto &settings_iface) {
+        [[maybe_unused]] const input_desktop_guard_t input_desktop {};
         return settings_iface.enumAvailableDevices();
       })};
       BOOST_LOG(info) << "Currently available display devices:\n"
@@ -759,6 +769,7 @@ namespace display_device {
     }
 
     return DD_DATA.sm_instance->execute([&output_name](auto &settings_iface) {
+      [[maybe_unused]] const input_desktop_guard_t input_desktop {};
       return settings_iface.getDisplayName(output_name);
     });
   }
@@ -769,7 +780,10 @@ namespace display_device {
       return {};
     }
 
-    const auto available_devices { DD_DATA.sm_instance->execute([](auto &settings_iface) { return settings_iface.enumAvailableDevices(); }) };
+    const auto available_devices { DD_DATA.sm_instance->execute([](auto &settings_iface) {
+      [[maybe_unused]] const input_desktop_guard_t input_desktop {};
+      return settings_iface.enumAvailableDevices();
+    }) };
 
     for (auto &i : available_devices) {
       if (i.m_display_name == display_name) {
@@ -804,6 +818,7 @@ namespace display_device {
     }
 
     DD_DATA.sm_instance->schedule([config](auto &settings_iface, auto &stop_token) {
+      [[maybe_unused]] const input_desktop_guard_t input_desktop {};
       // We only want to keep retrying in case of a transient errors.
       // In other cases, when we either fail or succeed we just want to stop...
       if (settings_iface.applySettings(config) != SettingsManagerInterface::ApplyResult::ApiTemporarilyUnavailable) {
@@ -841,6 +856,7 @@ namespace display_device {
     }
 
     return DD_DATA.sm_instance->execute([](auto &settings_iface) {
+      [[maybe_unused]] const input_desktop_guard_t input_desktop {};
       return settings_iface.enumAvailableDevices();
     });
   }
