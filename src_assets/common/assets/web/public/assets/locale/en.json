@@ -533,6 +533,7 @@
     "input_pen": "Pen Input",
     "input_mouse": "Mouse Input",
     "input_kbd": "Keyboard Input",
+    "client_mic": "Microphone",
     "clipboard_set": "Clipboard Set",
     "clipboard_read": "Clipboard Read",
     "file_upload": "File Upload",

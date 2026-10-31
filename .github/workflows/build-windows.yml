@@ -229,8 +229,8 @@ jobs:
             mingw-w64-ucrt-x86_64-zlib
             mingw-w64-ucrt-x86_64-ccache
 
-      # Fork code that doesn't need the rest of Apollo: the clipboard bundle, trackpad frames and the
-      # pointer's messages (shared with LuzLunar), a round trip through the real Windows clipboard, and gestures on a
+      # Fork code that doesn't need the rest of Apollo: the clipboard bundle, trackpad frames, the
+      # pointer's messages and the microphone's (shared with LuzLunar), a round trip through the real Windows clipboard, and gestures on a
       # real synthetic touchpad; the last two skip if the runner has no clipboard or touchpads.
       - name: Fork unit tests
         shell: msys2 {0}
@@ -246,6 +246,9 @@ jobs:
           # The pointer LuzLunar draws itself: its messages and cache, also shared with LuzLunar
           g++ -std=c++17 -Wall -Wextra -Isrc/fork tests/fork/luzcursor_test.cpp -o luzcursor_test
           ./luzcursor_test
+          # The Mac's microphone: its frames and STATE, also shared with LuzLunar
+          g++ -std=c++17 -Wall -Wextra -Isrc/fork tests/fork/luzmic_test.cpp -o luzmic_test
+          ./luzmic_test
           g++ -std=c++17 -Wall -DCLIPBUNDLE_WITH_ZLIB -Isrc/fork \
             tests/fork/clipboard_win_smoke.cpp src/fork/clipboard_win.cpp src/fork/clipbundle.cpp \
             -lz -lole32 -luser32 -o clipboard_win_smoke

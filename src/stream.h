@@ -36,6 +36,8 @@ namespace stream {
     uint32_t encryptionFlagsEnabled;
 
     std::optional<int> gcmap;
+
+    bool fork_mic = false;  ///< [fork] LuzLunar lends the PC its Mac's microphone (fork/mic.h)
   };
 
   namespace session {

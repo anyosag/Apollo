@@ -76,6 +76,7 @@ namespace rtsp_stream {
     /// luzCursor=1, or once it asks with luzCursor=host (POST /actions/cursor {"draw": "client"})
     bool luz_cursor = false;
     bool luz_cursor_draws = false;
+    bool luz_mic = false;  // [fork] LuzLunar lends the PC its Mac's microphone (luzMic=1, fork/mic.h)
 
     /// [fork] LuzLunar's own bitrate in kbps (luzBitrate=N), which the encoder starts at: it launched a quarter above it
     /// to leave room to raise it (fork/adaptive_bitrate.h); 0 from other clients
