@@ -1055,8 +1055,12 @@ namespace platf {
       return {};
     }
 
-    dxgi::adapter_t adapter;
-    for (int x = 0; factory->EnumAdapters1(x, &adapter) != DXGI_ERROR_NOT_FOUND; ++x) {
+    // Each adapter is wrapped in turn, so it's released: enumerating into the same adapter_t
+    // overwrote the last one without releasing it (Sunshine #4340)
+    dxgi::adapter_t::pointer adapter_p {};
+    for (int x = 0; factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
+      dxgi::adapter_t adapter {adapter_p};
+
       DXGI_ADAPTER_DESC1 adapter_desc;
       adapter->GetDesc1(&adapter_desc);
 
