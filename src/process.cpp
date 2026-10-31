@@ -109,12 +109,14 @@ namespace proc {
 
   /**
    * @brief Waits up to about 3 s for Windows to accept display changes again.
-   * [fork] Returns false at once while the session is locked, which outlasts the wait: HDR is now
-   * set during the launch, so waiting would only make a launch on a locked PC 3 s slower.
+   * [fork] On the lock screen, display changes work from the input desktop (Winlogon's; Sunshine
+   * #5892), which the callers' input_desktop_guard_t puts their thread on, so it asks Windows once
+   * from there: a lock outlasts the wait, which would only make a launch on a locked PC 3 s slower.
    */
   static bool wait_for_display_settings() {
+    platf::input_desktop_guard_t input_desktop;
     if (is_user_session_locked()) {
-      return false;
+      return !test_no_access_to_ccd_api();
     }
 
     auto retryInterval = 200ms;
@@ -288,6 +290,11 @@ namespace proc {
     fork_tweaks::apply_app_encoder_overrides(app.uuid);
 
 #ifdef _WIN32
+    // [fork] The display changes below from the input desktop, so they work on the lock screen too
+    // (Sunshine #5892); let go before the app starts
+    std::optional<platf::input_desktop_guard_t> input_desktop;
+    input_desktop.emplace();
+
     if (
       config::video.headless_mode        // Headless mode
       || launch_session->virtual_display // User requested virtual display
@@ -404,6 +411,8 @@ namespace proc {
       // [fork] Brings the display back if Windows switches it off mid-stream
       start_vdisplay_recovery();
     }
+
+    input_desktop.reset();
 
 #else
 
@@ -778,6 +787,8 @@ namespace proc {
   proc_t::vdisplay_change_e proc_t::reconfigure_virtual_display(const rtsp_stream::launch_session_t &session) {
     // [fork] Not while the recovery monitor brings the display back
     std::lock_guard vdisplay_lock {vdisplay_mutex()};
+    // [fork] From the input desktop, so the changes work on the lock screen too
+    platf::input_desktop_guard_t input_desktop;
 
     if (!virtual_display || _vdisplay_name.empty() || !_launch_session || vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
       return vdisplay_change_e::unchanged;
@@ -955,6 +966,8 @@ namespace proc {
   }
 
   bool proc_t::reactivate_virtual_display() {
+    // [fork] From the input desktop, so it works on the lock screen too
+    platf::input_desktop_guard_t input_desktop;
     if (!virtual_display || !_launch_session) {
       return false;
     }
@@ -981,6 +994,8 @@ namespace proc {
   }
 
   bool proc_t::recreate_virtual_display() {
+    // [fork] From the input desktop, so it works on the lock screen too
+    platf::input_desktop_guard_t input_desktop;
     if (!_launch_session || vDisplayDriverStatus != VDISPLAY::DRIVER_STATUS::OK) {
       return false;
     }
@@ -989,6 +1004,8 @@ namespace proc {
   }
 
   void proc_t::virtual_display_back(const std::string &name, bool was_off) {
+    // [fork] From the input desktop, so its display changes work on the lock screen too
+    platf::input_desktop_guard_t input_desktop;
     if (name != _vdisplay_name) {
       BOOST_LOG(info) << "vdisplay: "sv << _vdisplay_name << " is now "sv << name;
       {
@@ -1087,6 +1104,8 @@ namespace proc {
 #ifdef _WIN32
     // Not while the recovery monitor brings slot 0's display back
     std::lock_guard vdisplay_lock {vdisplay_mutex()};
+    // From the input desktop, so the group's displays change on the lock screen too (Sunshine #5892)
+    platf::input_desktop_guard_t input_desktop;
     // Without its displays, slot 0 streams alone; the other slots find no slot to join
     if (!display_group_app() || !virtual_display || !fork_tweaks::display_group::active()) {
       BOOST_LOG(warning) << "fork: display group: the app runs without its displays, so slot 0 streams alone"sv;
@@ -1320,6 +1339,11 @@ namespace proc {
     bool has_run = _app_id > 0;
 
 #ifdef _WIN32
+    // [fork] The display changes below from the input desktop, so they work on the lock screen too
+    // (Sunshine #5892)
+    std::optional<platf::input_desktop_guard_t> input_desktop;
+    input_desktop.emplace();
+
     // Revert HDR state
     if (has_run && !mode_changed_display.empty()) {
       auto displayNameW = platf::from_utf8(mode_changed_display);
@@ -1350,6 +1374,10 @@ namespace proc {
     if (display_group_app()) {
       fork_tweaks::display_group::restore();
     }
+
+    // [fork] Back before the tray, which can't be reached from Winlogon's desktop; display_device
+    // makes its own changes below from the input desktop
+    input_desktop.reset();
 
     // Only show the Stopped notification if we actually have an app to stop
     // Since terminate() is always run when a new app has started
