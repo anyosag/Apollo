@@ -31,7 +31,9 @@ extern "C" {
 #include "fork/fork_config.h"
 #include "fork/frame_loss.h"
 #include "fork/luzcursor.h"
+#include "fork/luzmic.h"  // [fork]
 #include "fork/luztouchpad.h"
+#include "fork/mic.h"  // [fork]
 #include "fork/nv_stream.h"
 #include "globals.h"
 #include "input.h"
@@ -458,6 +460,10 @@ namespace stream {
 
     std::mutex fork_messages_mutex;
     std::deque<fork_message_t> fork_messages;
+
+    /// [fork] LuzLunar's Mac microphone, when the stream has it (fork/mic.h): set before the control
+    /// stream sees the session, stopped by join(), gone with the session
+    std::shared_ptr<fork_mic::session_t> mic;
   };
 
   /**
@@ -1028,6 +1034,22 @@ namespace stream {
     return 0;
   }
 
+  /**
+   * [fork] A frame of LuzLunar's Mac microphone (fork/luzmic.h) goes to the Steam Streaming
+   * Microphone, never to input: played when the stream has the microphone and the client still has
+   * the Microphone permission, dropped otherwise.
+   * @return True when the input packet was such a frame.
+   */
+  static bool fork_mic_frame(session_t *session, const std::vector<uint8_t> &plaintext) {
+    if (!luzmic::is_frame(plaintext.data(), plaintext.size())) {
+      return false;
+    }
+    if (session->mic && (session->permission & crypto::PERM::client_mic) != crypto::PERM::_no) {
+      fork_mic::receive(*session->mic, plaintext.data(), plaintext.size());
+    }
+    return true;
+  }
+
   void controlBroadcastThread(control_server_t *server) {
     server->map(packetTypes[IDX_PERIODIC_PING], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_PERIODIC_PING]"sv;
@@ -1121,6 +1143,9 @@ namespace stream {
         std::copy(payload.end() - 16, payload.end(), std::begin(iv));
       }
 
+      if (fork_mic_frame(session, plaintext)) {  // [fork]
+        return;
+      }
       input::passthrough(session->input, std::move(plaintext), session->permission);
     });
 
@@ -1237,6 +1262,9 @@ namespace stream {
       // IDX_INPUT_DATA callback will attempt to decrypt unencrypted data, therefore we need pass it directly
       if (type == packetTypes[IDX_INPUT_DATA]) {
         plaintext.erase(std::begin(plaintext), std::begin(plaintext) + 4);
+        if (fork_mic_frame(session, plaintext)) {  // [fork]
+          return;
+        }
         input::passthrough(session->input, std::move(plaintext), session->permission);
       } else {
         server->call(type, session, next_payload, true);
@@ -2194,6 +2222,11 @@ namespace stream {
         task_pool.cancel(force_kill);
       });
 
+      // [fork] The microphone's thread, which puts back the default recording device (fork/mic.h)
+      if (session.mic) {
+        fork_mic::stop(*session.mic);
+      }
+
       BOOST_LOG(debug) << "Waiting for video to end..."sv;
       session.videoThread.join();
       BOOST_LOG(debug) << "Waiting for audio to end..."sv;
@@ -2276,6 +2309,18 @@ namespace stream {
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
         return -1;
+      }
+
+      // [fork] LuzLunar lends the PC its Mac's microphone, if it may (fork/mic.h): before the
+      // control stream sees the session, which hands it the frames and sends the STATEs
+      if (session.config.fork_mic) {
+        if ((session.permission & crypto::PERM::client_mic) == crypto::PERM::_no) {
+          BOOST_LOG(info) << "fork: the client would lend its microphone, but lacks the Microphone permission"sv;
+        } else {
+          session.mic = fork_mic::start([&session](std::string payload) {
+            send_fork_message(session, luzmic::k_type_state, std::move(payload), luzmic::k_channel);
+          });
+        }
       }
 
       session.control.expected_peer_address = addr_string;

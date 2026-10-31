@@ -36,7 +36,9 @@
 #include "fork/display_group.h"  // [fork]
 #include "fork/fork_config.h"  // [fork]
 #include "fork/host_sleep.h"  // [fork]
+#include "fork/luzmic.h"  // [fork]
 #include "fork/mac_drive.h"  // [fork]
+#include "fork/mic.h"  // [fork]
 #include "fork/touch_emulation.h"  // [fork]
 #include "fork/updater.h"  // [fork]
 #include "globals.h"
@@ -381,7 +383,8 @@ namespace nvhttp {
         named_cert_p->display_mode = el.value("display_mode", "");
         named_cert_p->perm = (PERM)(util::get_non_string_json_value<uint32_t>(el, "perm", (uint32_t)PERM::_all)) & PERM::_all;
         if (named_cert_p->perm == PERM::_all_before_host_update || named_cert_p->perm == PERM::_all_before_client_drive || named_cert_p->perm == PERM::_all_before_host_sleep ||
-            named_cert_p->perm == PERM::_all_before_client_pair || named_cert_p->perm == PERM::_all_before_host_log) {
+            named_cert_p->perm == PERM::_all_before_client_pair || named_cert_p->perm == PERM::_all_before_host_log ||
+            named_cert_p->perm == PERM::_all_before_client_mic) {
           named_cert_p->perm = PERM::_all;  // [fork] a client with every permission keeps every permission
         }
         named_cert_p->enable_legacy_ordering = el.value("enable_legacy_ordering", true);
@@ -534,6 +537,9 @@ namespace nvhttp {
     auto luz_cursor = get_arg(args, "luzCursor", "");
     launch_session->luz_cursor = luz_cursor == "1"sv || luz_cursor == "host"sv;
     launch_session->luz_cursor_draws = luz_cursor == "1"sv;
+
+    // [fork] LuzLunar lends the PC its Mac's microphone (fork/mic.h), if this host offers it
+    launch_session->luz_mic = get_arg(args, "luzMic", "") == "1"sv;
 
     // [fork] LuzLunar's own bitrate, below the one it launches with (fork/adaptive_bitrate.h)
     launch_session->luz_bitrate_kbps = fork_tweaks::adaptive_bitrate::parse_start_kbps(get_arg(args, "luzBitrate", "")).value_or(0);
@@ -1103,6 +1109,7 @@ namespace nvhttp {
       tree.put("root.LuzBitrateStart", fork_tweaks::adaptive_bitrate::supported() ? 1 : 0);  // [fork] and the stream starts at luzBitrate
       // [fork] 1: /actions/cursor works; 2: and the client can draw the pointer (luzcursor.h)
       tree.put("root.LuzCursor", !fork_tweaks::cursor_position::supported() ? 0 : fork_tweaks::client_cursor::enabled() ? luzcursor::k_serverinfo_version : 1);
+      tree.put("root.LuzMic", fork_mic::enabled() ? luzmic::k_serverinfo_version : 0);  // [fork] luzMic=1 lends the PC the Mac's microphone (luzmic.h)
       tree.put("root.LuzDisplayGroup", fork_tweaks::display_group::max_slots());  // [fork] "Desktop (multiple displays)" runs, with up to this many slots
       tree.put("root.LuzDisplayGroupApp", fork_tweaks::display_group::app_id());  // [fork] its app id
       tree.put("root.LuzPairDevice", fork_tweaks::pair_from_client ? 1 : 0);  // [fork] /actions/pairdevice works

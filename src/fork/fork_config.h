@@ -96,6 +96,11 @@ namespace fork_tweaks {
   /// of the stream's latency, when it asks (luzCursor=1, client_cursor.h). Off, Apollo always draws it.
   inline bool client_drawn_cursor = true;
 
+  /// `fork_mic`: LuzLunar can lend this PC its Mac's microphone, which PC apps record from the Steam
+  /// Streaming Microphone (mic.h), while it streams and something records. Off, /serverinfo says
+  /// <LuzMic>0 and a stream that asks gets none.
+  inline bool mac_microphone = true;
+
   /**
    * @brief Read the fork-only options and remove them from @p vars, so they aren't reported as unrecognized.
    * @param vars The parsed sunshine.conf options.

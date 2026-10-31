@@ -25,6 +25,7 @@ extern "C" {
 #include "config.h"
 #include "fork/client_cursor.h"  // [fork]
 #include "fork/display_group.h"  // [fork]
+#include "fork/mic.h"  // [fork]
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -1213,6 +1214,10 @@ namespace rtsp_stream {
 
     // [fork] LuzLunar draws the pointer itself, when it asked and it can (fork/client_cursor.h)
     config.monitor.fork_cursor = fork_tweaks::client_cursor::make_session(session.luz_cursor, session.luz_cursor_draws, fork_slot, config.controlProtocolType == 13);
+
+    // [fork] LuzLunar's Mac microphone, on the stream that sends input, whose STATEs need the
+    // encrypted control stream (fork/mic.h)
+    config.fork_mic = session.luz_mic && fork_slot <= 0 && config.controlProtocolType == 13 && fork_mic::enabled();
 
     auto stream_session = stream::session::alloc(config, session);
     if (fork_slot >= 0 && !fork_tweaks::display_group::claim(fork_slot, session, stream_session)) {
