@@ -542,7 +542,7 @@
     "server_cmd": "Server Command",
     "host_update": "Update Apollo",
     "client_drive": "Network Drive",
-    "host_sleep": "Sleep PC",
+    "host_sleep": "Sleep and Shut Down PC",
     "client_pair": "Pair Other Devices",
     "host_log": "Read Log",
     "list": "List Apps",
