@@ -65,6 +65,7 @@ static void test_status_json() {
   CHECK(json["reason"] == "none");
   CHECK(json["app"] == "");
   CHECK(json["token"] == "abc123");
+  CHECK(json["canShutDown"] == true);
 
   facts_t app;
   app.app_running = true;
@@ -91,6 +92,10 @@ static void test_status_json() {
   json = nlohmann::json::parse(accepted_json(true));
   CHECK(json["sleeping"] == true);
   CHECK(json["quitApp"] == true);
+  CHECK(json["state"] == "sleep");
+  json = nlohmann::json::parse(accepted_json(false, state_e::off));
+  CHECK(json["quitApp"] == false);
+  CHECK(json["state"] == "off");
 
   json = nlohmann::json::parse(refusal_json("app_running", "Cyberpunk 2077"));
   CHECK(json["error"] == "app_running");
@@ -106,6 +111,14 @@ static void test_parse_request() {
   CHECK(request && request->token == "abc" && request->quit_app);
   request = parse_request(R"({"token":"abc"})", error);
   CHECK(request && !request->quit_app);
+  // Without a state it's sleep, as from a LuzLunar from before Shut Down PC
+  CHECK(request && request->state == state_e::sleep);
+  request = parse_request(R"({"token":"abc","state":"sleep"})", error);
+  CHECK(request && request->state == state_e::sleep);
+  request = parse_request(R"({"token":"abc","quitApp":true,"state":"off"})", error);
+  CHECK(request && request->state == state_e::off && request->quit_app);
+  CHECK(key(state_e::off) == "off");
+  CHECK(key(state_e::sleep) == "sleep");
 
   auto rejected = [](std::string_view body) {
     std::string problem;
@@ -119,6 +132,9 @@ static void test_parse_request() {
   CHECK(rejected(R"({"token":5})"));
   CHECK(rejected(R"({"token":")" + std::string(max_token + 1, 'a') + R"("})"));
   CHECK(rejected(R"({"token":"abc","quitApp":"yes"})"));
+  CHECK(rejected(R"({"token":"abc","state":"hibernate"})"));
+  CHECK(rejected(R"({"token":"abc","state":1})"));
+  CHECK(rejected(R"({"token":"abc","state":null})"));
 }
 
 static void test_tokens() {

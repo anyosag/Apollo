@@ -5,8 +5,9 @@
  *
  * LuzLunar asks GET /actions/sleep, which says whether the PC can sleep now, names the app still
  * running if there is one, and hands out a token good for one POST within 30 seconds. POST
- * {"token": ..., "quitApp": true} then quits that app, as Quit does, and puts the PC to sleep.
- * Never while anything streams.
+ * {"token": ..., "quitApp": true} then quits that app, as Quit does, and puts the PC to sleep;
+ * with "state": "off" it shuts the PC down instead, fully (not Fast Startup's hybrid shutdown), so
+ * Wake-on-LAN can turn it on again. Never while anything streams.
  *
  * Header-only, without Boost or Windows, so tests can build it on its own.
  */
@@ -97,13 +98,25 @@ namespace host_sleep_policy {
     return blocker(facts, true) == reason_e::none;
   }
 
+  /// What POST asks the PC to do
+  enum class state_e {
+    sleep,  ///< Sleep (S1–S3)
+    off,  ///< A full shutdown
+  };
+
+  inline std::string_view key(state_e state) {
+    return state == state_e::off ? "off" : "sleep";
+  }
+
   /**
-   * @brief GET's answer: {"available", "reason", "app", "token"}. The reason is "app_running"
-   * when an app would be quit; the token is there only when the PC can sleep.
+   * @brief GET's answer: {"available", "reason", "app", "canShutDown", "token"}. The reason is
+   * "app_running" when an app would be quit; the token is there only when the PC can sleep (or
+   * shut down: the same things stop both).
    */
   inline std::string status_json(const facts_t &facts, const std::string &token) {
     nlohmann::json json;
     json["available"] = available(facts);
+    json["canShutDown"] = true;
     json["reason"] = std::string {key(blocker(facts, false))};
     json["app"] = facts.app_running ? facts.app : std::string {};
     if (available(facts) && !token.empty()) {
@@ -112,9 +125,9 @@ namespace host_sleep_policy {
     return json.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
   }
 
-  /// POST's answer once the PC is about to sleep
-  inline std::string accepted_json(bool quit_app) {
-    return nlohmann::json {{"sleeping", true}, {"quitApp", quit_app}}.dump();
+  /// POST's answer once the PC is about to sleep or shut down
+  inline std::string accepted_json(bool quit_app, state_e state = state_e::sleep) {
+    return nlohmann::json {{"sleeping", true}, {"quitApp", quit_app}, {"state", std::string {key(state)}}}.dump();
   }
 
   /// A refusal: {"error", "app"}, with the app when it's the reason
@@ -130,10 +143,12 @@ namespace host_sleep_policy {
   struct request_t {
     std::string token;
     bool quit_app = false;
+    state_e state = state_e::sleep;
   };
 
   /**
-   * @brief Reads POST /actions/sleep's body: {"token": ..., "quitApp": true|false}.
+   * @brief Reads POST /actions/sleep's body: {"token": ..., "quitApp": true|false, "state":
+   * "sleep"|"off"}. Without a state it's sleep, as LuzLunar asked before Shut Down PC.
    * @param error Set to what's wrong when it isn't valid.
    */
   inline std::optional<request_t> parse_request(std::string_view body, std::string &error) {
@@ -156,6 +171,13 @@ namespace host_sleep_policy {
         return std::nullopt;
       }
       request.quit_app = quit->get<bool>();
+    }
+    if (auto state = json.find("state"); state != json.end()) {
+      if (!state->is_string() || (*state != "sleep" && *state != "off")) {
+        error = "invalid state";
+        return std::nullopt;
+      }
+      request.state = *state == "off" ? state_e::off : state_e::sleep;
     }
     return request;
   }

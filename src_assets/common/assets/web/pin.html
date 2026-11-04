@@ -263,7 +263,7 @@
       server_cmd       = _operation << 4,  // Allow execute server cmd
       host_update      = _operation << 5,  // [fork] Allow updating Apollo
       client_drive     = _operation << 6,  // [fork] Allow mounting the client's disk as a network drive
-      host_sleep       = _operation << 7,  // [fork] Allow putting this PC to sleep
+      host_sleep       = _operation << 7,  // [fork] Allow putting this PC to sleep, shutting it down, and fixing its wake settings
       _all_opeiations  = clipboard_set | clipboard_read | file_upload | file_dwnload | server_cmd | host_update | client_drive | host_sleep,
 
       _action          = _operation << 8,  // Action permission group
