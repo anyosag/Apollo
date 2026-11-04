@@ -1,6 +1,6 @@
 /**
  * @file src/fork/host_sleep.cpp
- * @brief Putting this PC to sleep from LuzLunar.
+ * @brief Putting this PC to sleep from LuzLunar, or shutting it down.
  */
 // standard includes
 #include <atomic>
@@ -93,17 +93,38 @@ namespace fork_tweaks::host_sleep {
       return ok;
     }
 
-    /// Sleeps once the answer is out, unless a stream or an update started meanwhile
-    void sleep_soon(std::string client) {
-      std::thread([client = std::move(client)]() {
+    /**
+     * @brief Shuts the PC down fully: without SHUTDOWN_HYBRID, InitiateShutdown never does Fast
+     * Startup's hybrid shutdown, at which Windows disarms the network adapter, so Wake-on-LAN can
+     * turn the PC on again (as far as the adapter's driver and the BIOS allow). Apollo runs as
+     * SYSTEM, so the signed-in user counts as another user, whose apps are closed.
+     */
+    void shut_down(const std::string &client) {
+      BOOST_LOG(info) << "fork: Sleep: shutting this PC down (a full shutdown, not Fast Startup) for client ["sv << client << ']';
+      auto status = InitiateShutdownW(nullptr, nullptr, 0, SHUTDOWN_POWEROFF | SHUTDOWN_FORCE_OTHERS, SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_OTHER | SHTDN_REASON_FLAG_PLANNED);
+      if (status != ERROR_SUCCESS) {
+        BOOST_LOG(error) << "fork: Sleep: Windows didn't shut down: "sv << status;
+        sleeping = false;
+      }
+      // Otherwise it stays set: the PC is going down
+    }
+
+    /// Sleeps or shuts down once the answer is out, unless a stream or an update started meanwhile
+    void sleep_soon(std::string client, policy::state_e state) {
+      std::thread([client = std::move(client), state]() {
         std::this_thread::sleep_for(policy::settle);
+        auto verb = state == policy::state_e::off ? "shutting down"sv : "sleeping"sv;
         if (streaming() || updater::installing()) {
-          BOOST_LOG(info) << "fork: Sleep: not sleeping after all for client ["sv << client << "]: "sv << (streaming() ? "a stream started"sv : "an update is installing"sv);
+          BOOST_LOG(info) << "fork: Sleep: not "sv << verb << " after all for client ["sv << client << "]: "sv << (streaming() ? "a stream started"sv : "an update is installing"sv);
           sleeping = false;
           return;
         }
         if (!enable_shutdown_privilege()) {
           BOOST_LOG(warning) << "fork: Sleep: couldn't enable the shutdown privilege: "sv << GetLastError();
+        }
+        if (state == policy::state_e::off) {
+          shut_down(client);
+          return;
         }
         BOOST_LOG(info) << "fork: Sleep: putting this PC to sleep for client ["sv << client << ']';
         // Wake events stay on, so Wake-on-LAN and the keyboard still wake it. Returns after waking.
@@ -177,8 +198,8 @@ namespace fork_tweaks::host_sleep {
       display_device::revert_configuration();
     }
 
-    sleep_soon(client.name);
-    return {202, policy::accepted_json(now.app_running)};
+    sleep_soon(client.name, request->state);
+    return {202, policy::accepted_json(now.app_running, request->state)};
   }
 #else
   bool supported() {
