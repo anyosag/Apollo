@@ -59,6 +59,11 @@ namespace fork_tweaks {
   /// quitting an app that's still running first; never while anything streams (host_sleep.h).
   inline bool client_sleep = true;
 
+  /// `fork_host_wake_setup`: LuzLunar can check, for clients with the Sleep and Shut Down PC
+  /// permission, what stops Wake PC from turning this PC on from off (the network adapter's driver
+  /// settings, Fast Startup), and fix it, with an undo; never while anything streams (wake_setup.h).
+  inline bool client_wake_setup = true;
+
   /// `fork_adaptive_bitrate`: LuzLunar can lower its stream's bitrate while it runs, and raise it back
   /// to the bitrate it launched with (adaptive_bitrate.h). NVENC changes it without a keyframe; other
   /// encoders refuse.

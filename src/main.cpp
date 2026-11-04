@@ -18,6 +18,7 @@
 #include "fork/pointer_speed.h"  // [fork]
 #include "fork/tablet_posture.h"  // [fork]
 #include "fork/updater.h"  // [fork]
+#include "fork/wake_setup.h"  // [fork]
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
@@ -235,6 +236,9 @@ int main(int argc, char *argv[]) {
 
   // [fork] Puts back the frame cap, V-Sync and Smooth Motion a run that stopped mid-stream left on
   fork_tweaks::nv_stream::recover();
+
+  // [fork] Logs how this PC was last powered on (SMBIOS), which LuzLunar's Wake PC asks about
+  fork_tweaks::wake_setup::start();
 
   // Wait as long as possible to terminate Sunshine.exe during logoff/shutdown
   SetProcessShutdownParameters(0x100, SHUTDOWN_NORETRY);

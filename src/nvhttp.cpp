@@ -42,6 +42,7 @@
 #include "fork/mic.h"  // [fork]
 #include "fork/touch_emulation.h"  // [fork]
 #include "fork/updater.h"  // [fork]
+#include "fork/wake_setup.h"  // [fork]
 #include "globals.h"
 #include "httpcommon.h"
 #include "logging.h"
@@ -2086,6 +2087,25 @@ namespace nvhttp {
   }
 
   /**
+   * @brief [fork] Turning this PC on from off with LuzLunar's Wake PC (src/fork/wake_setup.h): GET
+   * checks the network adapter the client reached and Fast Startup, and hands out a token when there
+   * is something to fix or undo; POST {"token", "action"} fixes or undoes them. Needs the host_sleep
+   * permission; never while anything streams.
+   */
+  void forkWake(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    auto named_cert_p = get_verified_cert(request);
+    fork_tweaks::wake_setup::client_t client {named_cert_p->name, named_cert_p->uuid, !!(named_cert_p->perm & PERM::host_sleep)};
+    auto local_address = net::addr_to_normalized_string(request->local_endpoint().address());
+    auto reply = fork_tweaks::wake_setup::handle(client, local_address, request->method, request->content.string());
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    response->write(static_cast<SimpleWeb::StatusCode>(reply.status), reply.body, headers);
+  }
+
+  /**
    * @brief [fork] LuzLunar's bitrate while its stream runs (fork/adaptive_bitrate.h). GET reports
    * it; POST {"kbps": N} changes it, between a floor and the bitrate the stream launched with. Only
    * the client's own stream; needs View or Launch.
@@ -2308,6 +2328,8 @@ namespace nvhttp {
     https_server.resource["^/actions/drive$"]["POST"] = forkDrive;  // [fork]
     https_server.resource["^/actions/sleep$"]["GET"] = forkSleep;  // [fork]
     https_server.resource["^/actions/sleep$"]["POST"] = forkSleep;  // [fork]
+    https_server.resource["^/actions/wake$"]["GET"] = forkWake;  // [fork]
+    https_server.resource["^/actions/wake$"]["POST"] = forkWake;  // [fork]
     https_server.resource["^/actions/bitrate$"]["GET"] = forkBitrate;  // [fork]
     https_server.resource["^/actions/bitrate$"]["POST"] = forkBitrate;  // [fork]
     https_server.resource["^/actions/cursor$"]["GET"] = forkCursor;  // [fork]
