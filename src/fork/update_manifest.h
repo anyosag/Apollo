@@ -265,7 +265,7 @@ namespace fork_update {
     ready,  ///< An update is downloaded and checked, waiting to install
     waiting,  ///< Asked to install, waiting until nobody streams
     installing,  ///< The helper is installing; Apollo is about to stop
-    failed,  ///< The last check or download failed; it retries at the next check
+    failed,  ///< The last check, download or install failed; the next check or Install tries again
   };
 
   inline const char *to_string(state_e state) {
@@ -317,6 +317,29 @@ namespace fork_update {
       return streaming || app_running ? install_decision_e::wait : install_decision_e::install;
     }
     return install_decision_e::none;
+  }
+
+  /**
+   * @brief The state once someone asks to install, or a check finds the update it already has
+   * downloaded: a failed install whose installer is still there goes back to ready, so the next
+   * Install tries it again (maybe_install() checks the file's hash once more first). A failed
+   * install used to keep its download, so Install and the checks left it failed until Apollo
+   * restarted. Anything else stays as it is.
+   * @param has_download The update's installer is downloaded and was checked.
+   */
+  inline state_e retry_failed_install(state_e state, bool has_download) {
+    return state == state_e::failed && has_download ? state_e::ready : state;
+  }
+
+  /**
+   * @brief The state after a check finds the update it already has downloaded. The check set the
+   * state to checking, so it goes back to what it was: waiting stays waiting, and ready, a failed
+   * install (tried again) and anything else become ready. Leaving it checking, as before, made
+   * every Install wait for a state that never came, from the second check after a download on.
+   * @param before The state before the check began.
+   */
+  inline state_e after_recheck(state_e before) {
+    return before == state_e::waiting ? state_e::waiting : state_e::ready;
   }
 
   /// What each Apollo writes when it starts (updates\started.json), so the helper knows the new build is up
