@@ -344,6 +344,11 @@ namespace fork_tweaks::updater {
     }
 
     void check() {
+      fu::state_e before;
+      {
+        std::lock_guard lock {u().mutex};
+        before = u().state;
+      }
       set_state(fu::state_e::checking, "Checking for updates");
 
       std::string error;
@@ -369,7 +374,10 @@ namespace fork_tweaks::updater {
           u().state = fu::state_e::idle;
           u().message = "Apollo is up to date";
         } else if (u().ready && u().ready->run == manifest->run) {
-          // Already downloaded; leave the state as it is (ready or waiting)
+          // Already downloaded: back to what it was before the check, and a failed install is tried again
+          u().state = fu::after_recheck(before);
+          u().message = u().state == fu::state_e::waiting ? "Installs " + u().ready->version + " once nobody is streaming"
+                                                          : u().ready->version + " is ready to install";
           return;
         } else {
           u().ready.reset();
@@ -675,6 +683,13 @@ namespace fork_tweaks::updater {
         u().check_requested = true;
       } else if (action == "install"sv && u().state != fu::state_e::installing) {
         u().install_requested = true;
+        // After a failed install the download is still there: try it again rather than ignore the request
+        auto state = fu::retry_failed_install(u().state, u().ready.has_value());
+        if (state != u().state) {
+          BOOST_LOG(info) << "Update: retrying "sv << u().ready->version << " after a failed install"sv;
+          u().state = state;
+          u().message = u().ready->version + " is ready to install";
+        }
       }
       u().wake = true;
     }

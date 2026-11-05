@@ -174,6 +174,33 @@ static void test_decide_install() {
   CHECK(decide_install(true, false, false, false, false) == none);
 }
 
+static void test_retry_failed_install() {
+  // A failed install whose installer is still there is tried again
+  CHECK(retry_failed_install(state_e::failed, true) == state_e::ready);
+  // A failed check or download has nothing to install: the next check downloads again
+  CHECK(retry_failed_install(state_e::failed, false) == state_e::failed);
+  // Anything else stays as it is
+  for (auto state : {state_e::idle, state_e::checking, state_e::downloading, state_e::ready, state_e::waiting, state_e::installing}) {
+    CHECK(retry_failed_install(state, true) == state);
+    CHECK(retry_failed_install(state, false) == state);
+  }
+  // Ready again, it installs when asked
+  CHECK(decide_install(retry_failed_install(state_e::failed, true) == state_e::ready, true, false, false, false) == install_decision_e::install);
+}
+
+static void test_after_recheck() {
+  // A check that finds the update it already has goes back to ready, not checking
+  CHECK(after_recheck(state_e::ready) == state_e::ready);
+  CHECK(after_recheck(state_e::waiting) == state_e::waiting);
+  CHECK(after_recheck(state_e::failed) == state_e::ready);
+  CHECK(after_recheck(state_e::idle) == state_e::ready);
+  CHECK(after_recheck(state_e::checking) == state_e::ready);
+  for (auto before : {state_e::idle, state_e::checking, state_e::downloading, state_e::ready, state_e::waiting, state_e::failed}) {
+    auto after = after_recheck(before);
+    CHECK(after == state_e::ready || after == state_e::waiting);
+  }
+}
+
 static void test_records() {
   started_t s {130, 4242, 47989, "0.4.8.120"};
   auto parsed = parse_started(to_json(s));
@@ -283,6 +310,8 @@ int main() {
   test_ordering();
   test_urls();
   test_decide_install();
+  test_retry_failed_install();
+  test_after_recheck();
   test_records();
   test_base64();
   test_signature();
