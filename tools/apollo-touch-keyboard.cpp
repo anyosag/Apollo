@@ -57,7 +57,48 @@
 using namespace std::literals;
 namespace tkp = touch_keyboard_policy;
 
+/**
+ * The COM interfaces this calls without an SDK header, with external linkage on purpose. In the
+ * anonymous namespace GCC can see that nothing in the program implements them, and it compiled the
+ * calls through them into direct calls to a bogus address (1 GB below the image): the first
+ * GetInputHostManagerBroker() crashed the helper with an access violation on every start, before
+ * it could open a keyboard. Declared here, other code could implement them, so the calls stay
+ * virtual. Keep new interfaces here too.
+ */
+namespace apollo_touch_keyboard_com {
+  /// TabTip's ITipInvocation, undocumented
+  struct tip_invocation_t: IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE Toggle(HWND wnd) = 0;
+  };
+
+  /// The immersive shell's IInputHostManagerBroker, undocumented
+  struct input_host_manager_broker_t: IUnknown {
+    /// @param mode 0 when it's not up, 2 floating, 3 docked
+    virtual HRESULT STDMETHODCALLTYPE GetIhmLocation(RECT *rect, int *mode) = 0;
+  };
+
+  /// The immersive shell's IImmersiveShellBroker, undocumented. Windows' own marshaling data for it
+  /// (OneCoreUAPCommonProxyStub.dll) puts the method handing out IInputHostManagerBroker in slot 4.
+  struct immersive_shell_broker_t: IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE Dummy() = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetInputHostManagerBroker(input_host_manager_broker_t **broker) = 0;
+  };
+
+  /// IFrameworkInputPane, documented (shobjidl_core.h)
+  struct framework_input_pane_t: IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE Advise(IUnknown *window, IUnknown *handler, DWORD *cookie) = 0;
+    virtual HRESULT STDMETHODCALLTYPE AdviseWithHWND(HWND wnd, IUnknown *handler, DWORD *cookie) = 0;
+    virtual HRESULT STDMETHODCALLTYPE Unadvise(DWORD cookie) = 0;
+    virtual HRESULT STDMETHODCALLTYPE Location(RECT *rect) = 0;
+  };
+}  // namespace apollo_touch_keyboard_com
+
 namespace {
+  using apollo_touch_keyboard_com::framework_input_pane_t;
+  using apollo_touch_keyboard_com::immersive_shell_broker_t;
+  using apollo_touch_keyboard_com::input_host_manager_broker_t;
+  using apollo_touch_keyboard_com::tip_invocation_t;
+
   // Not in every SDK's headers
   constexpr TEXTATTRIBUTEID is_read_only_attribute = 40015;  // UIA_IsReadOnlyAttributeId
 
@@ -73,35 +114,14 @@ namespace {
   constexpr GUID clsid_ui_host_no_launch = {0x4ce576fa, 0x83dc, 0x4f88, {0x95, 0x1c, 0x9d, 0x07, 0x82, 0xb4, 0xe3, 0x76}};
   constexpr GUID iid_tip_invocation = {0x37c994e7, 0x432b, 0x4834, {0xa2, 0xf7, 0xdc, 0xe1, 0xf1, 0x3b, 0x83, 0x4b}};
 
-  struct tip_invocation_t: IUnknown {
-    virtual HRESULT STDMETHODCALLTYPE Toggle(HWND wnd) = 0;
-  };
-
   // The immersive shell's broker for the input host (the keyboard), undocumented
   constexpr GUID clsid_immersive_shell_broker = {0x228826af, 0x02e1, 0x4226, {0xa9, 0xe0, 0x99, 0xa8, 0x55, 0xe4, 0x55, 0xa6}};
   constexpr GUID iid_immersive_shell_broker = {0x9767060c, 0x9476, 0x42e2, {0x8f, 0x7b, 0x2f, 0x10, 0xfd, 0x13, 0x76, 0x5c}};
   constexpr GUID iid_input_host_manager_broker = {0x2166ee67, 0x71df, 0x4476, {0x83, 0x94, 0x0c, 0xed, 0x2e, 0xd0, 0x52, 0x74}};
 
-  struct input_host_manager_broker_t: IUnknown {
-    /// @param mode 0 when it's not up, 2 floating, 3 docked
-    virtual HRESULT STDMETHODCALLTYPE GetIhmLocation(RECT *rect, int *mode) = 0;
-  };
-
-  struct immersive_shell_broker_t: IUnknown {
-    virtual HRESULT STDMETHODCALLTYPE Dummy() = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetInputHostManagerBroker(input_host_manager_broker_t **broker) = 0;
-  };
-
-  // IFrameworkInputPane, documented (shobjidl_core.h), declared here like the rest
+  // IFrameworkInputPane, documented (shobjidl_core.h), declared above like the rest
   constexpr GUID clsid_framework_input_pane = {0xd5120aa3, 0x46ba, 0x44c5, {0x82, 0x2d, 0xca, 0x80, 0x92, 0xc1, 0xfc, 0x72}};
   constexpr GUID iid_framework_input_pane = {0x5752238b, 0x24f0, 0x495a, {0x82, 0xf1, 0x2f, 0xd5, 0x93, 0x05, 0x67, 0x96}};
-
-  struct framework_input_pane_t: IUnknown {
-    virtual HRESULT STDMETHODCALLTYPE Advise(IUnknown *window, IUnknown *handler, DWORD *cookie) = 0;
-    virtual HRESULT STDMETHODCALLTYPE AdviseWithHWND(HWND wnd, IUnknown *handler, DWORD *cookie) = 0;
-    virtual HRESULT STDMETHODCALLTYPE Unadvise(DWORD cookie) = 0;
-    virtual HRESULT STDMETHODCALLTYPE Location(RECT *rect) = 0;
-  };
 
   /// Releases a COM interface
   template<class T>
@@ -723,6 +743,8 @@ int main(int argc, char **argv) {
     say("info", "hidden: Apollo is done with it");
   }
   say("info", "stopped");
-  CoUninitialize();
+  // No CoUninitialize(): automation's and keyboard's COM objects are released by their destructors
+  // after this returns, and releasing them after CoUninitialize() crashed the helper on every exit.
+  // The process ends here anyway.
   return 0;
 }
