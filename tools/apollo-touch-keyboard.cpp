@@ -743,6 +743,8 @@ int main(int argc, char **argv) {
     say("info", "hidden: Apollo is done with it");
   }
   say("info", "stopped");
-  CoUninitialize();
+  // No CoUninitialize(): automation's and keyboard's COM objects are released by their destructors
+  // after this returns, and releasing them after CoUninitialize() crashed the helper on every exit.
+  // The process ends here anyway.
   return 0;
 }
